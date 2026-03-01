@@ -115,6 +115,8 @@ export interface LLMContext {
   phase1_survey: LLMContextPhase;
   phase2_deep: LLMContextPhase;
   phase3_validation: LLMContextPhase;
+  /** Compact signatures for ALL analyzed files — used by Stage 1 instead of bare file paths */
+  signatures?: import('./signature-extractor.js').FileSignatureMap[];
 }
 
 /**
@@ -864,10 +866,26 @@ export class AnalysisArtifactGenerator {
       totalTokens: phase3Files.reduce((sum, f) => sum + f.tokens, 0),
     };
 
+    // Signature extraction for ALL analyzed files (used in Stage 1)
+    const { extractSignatures } = await import('./signature-extractor.js');
+    const signatures: import('./signature-extractor.js').FileSignatureMap[] = [];
+    for (const file of repoMap.allFiles) {
+      try {
+        const content = await readFile(file.absolutePath, 'utf-8');
+        const map = extractSignatures(file.path, content);
+        if (map.entries.length > 0) {
+          signatures.push(map);
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
     return {
       phase1_survey: phase1,
       phase2_deep: phase2,
       phase3_validation: phase3,
+      signatures,
     };
   }
 }

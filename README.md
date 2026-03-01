@@ -302,6 +302,7 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 | `llm-context.json` | Context prepared for LLM |
 | `dependencies.mermaid` | Visual dependency graph |
 | `SUMMARY.md` | Human-readable analysis summary |
+| `mapping.json` | Requirement→function mapping (produced by `generate`) |
 
 ## Configuration
 

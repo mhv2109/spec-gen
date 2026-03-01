@@ -553,6 +553,7 @@ Each spec.md follows OpenSpec conventions:
       // Run generation pipeline
       const pipeline = new SpecGenerationPipeline(llm, {
         outputDir: join(rootPath, '.spec-gen', 'generation'),
+        rootPath,
         saveIntermediate: true,
         generateADRs: opts.adr || opts.adrOnly,
       });

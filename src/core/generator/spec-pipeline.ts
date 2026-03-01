@@ -11,6 +11,7 @@ import logger from '../../utils/logger.js';
 import type { LLMService } from '../services/llm-service.js';
 import type { RepoStructure, LLMContext } from '../analyzer/artifact-generator.js';
 import type { DependencyGraphResult } from '../analyzer/dependency-graph.js';
+import { formatSignatureMaps, STAGE1_MAX_CHARS } from '../analyzer/signature-extractor.js';
 
 // ============================================================================
 // TYPES
@@ -219,6 +220,8 @@ export interface StageResult<T> {
 export interface PipelineOptions {
   /** Output directory for intermediate results */
   outputDir: string;
+  /** Root path of the project — enables disk-based file reading in resolveFiles */
+  rootPath?: string;
   /** Skip specific stages */
   skipStages?: string[];
   /** Resume from a specific stage */
@@ -371,6 +374,7 @@ export class SpecGenerationPipeline {
       skipStages: options.skipStages ?? [],
       resumeFrom: options.resumeFrom ?? '',
       maxRetries: options.maxRetries ?? 2,
+      rootPath: options.rootPath ?? '',
       saveIntermediate: options.saveIntermediate ?? true,
       generateADRs: options.generateADRs ?? false,
     };
@@ -421,7 +425,7 @@ export class SpecGenerationPipeline {
     let entities: ExtractedEntity[] = [];
     if (this.shouldRunStage('entities')) {
       logger.analysis('Running Stage 2: Entity Extraction');
-      const schemaFiles = this.resolveFiles(llmContext, survey.schemaFiles ?? [], this.getSchemaFiles(llmContext));
+      const schemaFiles = await this.resolveFiles(llmContext, survey.schemaFiles ?? [], this.getSchemaFiles(llmContext));
       if (schemaFiles.length > 0) {
         const result = await this.runStage2(survey, schemaFiles);
         entities = result.data ?? [];
@@ -439,7 +443,7 @@ export class SpecGenerationPipeline {
     let services: ExtractedService[] = [];
     if (this.shouldRunStage('services')) {
       logger.analysis('Running Stage 3: Service Analysis');
-      const serviceFiles = this.resolveFiles(llmContext, survey.serviceFiles ?? [], this.getServiceFiles(llmContext));
+      const serviceFiles = await this.resolveFiles(llmContext, survey.serviceFiles ?? [], this.getServiceFiles(llmContext));
       if (serviceFiles.length > 0) {
         const result = await this.runStage3(survey, entities, serviceFiles);
         services = result.data ?? [];
@@ -457,7 +461,7 @@ export class SpecGenerationPipeline {
     let endpoints: ExtractedEndpoint[] = [];
     if (this.shouldRunStage('api')) {
       logger.analysis('Running Stage 4: API Extraction');
-      const apiFiles = this.resolveFiles(llmContext, survey.apiFiles ?? [], this.getApiFiles(llmContext));
+      const apiFiles = await this.resolveFiles(llmContext, survey.apiFiles ?? [], this.getApiFiles(llmContext));
       if (apiFiles.length > 0) {
         const result = await this.runStage4(apiFiles);
         endpoints = result.data ?? [];
@@ -559,11 +563,38 @@ export class SpecGenerationPipeline {
 
   /**
    * Stage 1: Project Survey
+   * Uses function signatures for all project files when available (language-agnostic),
+   * chunking into multiple LLM calls if the total exceeds STAGE1_MAX_CHARS.
+   * Falls back to the legacy phase2_deep file-path list if signatures are absent.
    */
   private async runStage1(repoStructure: RepoStructure, llmContext: LLMContext): Promise<StageResult<ProjectSurveyResult>> {
+    if (llmContext.signatures && llmContext.signatures.length > 0) {
+      const chunks = formatSignatureMaps(llmContext.signatures, STAGE1_MAX_CHARS);
+      if (chunks.length === 1) {
+        return this.runStage1WithSection(repoStructure, chunks[0], true);
+      }
+      logger.analysis(`Stage 1: ${chunks.length} signature chunks across ${llmContext.signatures.length} files`);
+      const results = await Promise.all(chunks.map(c => this.runStage1WithSection(repoStructure, c, true)));
+      return this.mergeStage1Results(results);
+    }
+    // Legacy fallback — only the 20 files in phase2_deep are visible
+    const section = llmContext.phase2_deep.files.map(f => `- ${f.path}`).join('\n');
+    return this.runStage1WithSection(repoStructure, section, false);
+  }
+
+  /**
+   * Single Stage 1 LLM call for one chunk of files/signatures.
+   */
+  private async runStage1WithSection(
+    repoStructure: RepoStructure,
+    fileListingSection: string,
+    isSignatures: boolean,
+  ): Promise<StageResult<ProjectSurveyResult>> {
     const startTime = Date.now();
 
-    const filePaths = llmContext.phase2_deep.files.map(f => f.path);
+    const sectionLabel = isSignatures
+      ? 'Function/class signatures extracted from all project files (use exact file paths shown in === headers for schemaFiles/serviceFiles/apiFiles):'
+      : 'Available file paths for analysis (use ONLY these exact strings for schemaFiles/serviceFiles/apiFiles):';
 
     const userPrompt = `Analyze this project structure:
 
@@ -585,8 +616,8 @@ Statistics:
 - Edge count: ${repoStructure.statistics.edgeCount}
 - Clusters: ${repoStructure.statistics.clusterCount}
 
-Available file paths for analysis (use ONLY these exact strings for schemaFiles/serviceFiles/apiFiles):
-${filePaths.map(p => `- ${p}`).join('\n')}`;
+${sectionLabel}
+${fileListingSection}`;
 
     try {
       const result = await this.llm.completeJSON<ProjectSurveyResult>({
@@ -618,6 +649,29 @@ ${filePaths.map(p => `- ${p}`).join('\n')}`;
         duration: Date.now() - startTime,
       };
     }
+  }
+
+  /**
+   * Merge multiple Stage 1 results (from chunked runs) into one.
+   * Uses the highest-confidence result for metadata; concatenates + deduplicates file lists.
+   */
+  private mergeStage1Results(results: StageResult<ProjectSurveyResult>[]): StageResult<ProjectSurveyResult> {
+    const successful = results.filter(r => r.success && r.data);
+    if (successful.length === 0) return results[0];
+
+    const best = successful.reduce((a, b) => (a.data!.confidence >= b.data!.confidence ? a : b));
+
+    return {
+      ...best,
+      data: {
+        ...best.data!,
+        schemaFiles:  [...new Set(successful.flatMap(r => r.data!.schemaFiles  ?? []))],
+        serviceFiles: [...new Set(successful.flatMap(r => r.data!.serviceFiles ?? []))],
+        apiFiles:     [...new Set(successful.flatMap(r => r.data!.apiFiles     ?? []))],
+      },
+      tokens:   results.reduce((s, r) => s + r.tokens, 0),
+      duration: results.reduce((s, r) => s + r.duration, 0),
+    };
   }
 
   /**
@@ -667,7 +721,7 @@ ${filePaths.map(p => `- ${p}`).join('\n')}`;
     const allEntities: ExtractedEntity[] = [];
     const seenNames = new Set<string>();
 
-    for (const file of schemaFiles.slice(0, 10)) {
+    for (const file of schemaFiles) {
       const chunks = this.chunkContent(file.content, 8000);
       for (let i = 0; i < chunks.length; i++) {
         const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
@@ -723,7 +777,7 @@ ${filePaths.map(p => `- ${p}`).join('\n')}`;
     const allServices: ExtractedService[] = [];
     const seenNames = new Set<string>();
 
-    for (const file of serviceFiles.slice(0, 10)) {
+    for (const file of serviceFiles) {
       const chunks = this.chunkContent(file.content, 8000);
       for (let i = 0; i < chunks.length; i++) {
         const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
@@ -765,53 +819,55 @@ ${filePaths.map(p => `- ${p}`).join('\n')}`;
   }
 
   /**
-   * Stage 4: API Extraction
+   * Stage 4: API Extraction — one LLM call per file (chunked if large)
    */
   private async runStage4(
     apiFiles: Array<{ path: string; content: string }>
   ): Promise<StageResult<ExtractedEndpoint[]>> {
     const startTime = Date.now();
+    const allEndpoints: ExtractedEndpoint[] = [];
+    const seenPaths = new Set<string>();
 
-    const filesContent = apiFiles
-      .slice(0, 10)
-      .map(f => `=== ${f.path} ===\n${f.content}`)
-      .join('\n\n');
-
-    const userPrompt = `Analyze these API/route files and extract endpoints:
-
-${filesContent}`;
-
-    try {
-      const result = await this.llm.completeJSON<ExtractedEndpoint[]>({
-        systemPrompt: PROMPTS.stage4_api,
-        userPrompt,
-        temperature: 0.3,
-        maxTokens: 2000,
-      });
-
-      const stageResult: StageResult<ExtractedEndpoint[]> = {
-        stage: 'api',
-        success: true,
-        data: Array.isArray(result) ? result : [],
-        tokens: this.llm.getTokenUsage().totalTokens,
-        duration: Date.now() - startTime,
-      };
-
-      if (this.options.saveIntermediate) {
-        await this.saveResult('stage4-api', stageResult);
+    for (const file of apiFiles) {
+      const chunks = this.chunkContent(file.content, 8000);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
+        const userPrompt = `Analyze this API/route file and extract endpoints:\n\n=== ${file.path}${chunkNote} ===\n${chunks[i]}`;
+        try {
+          const result = await this.llm.completeJSON<ExtractedEndpoint[]>({
+            systemPrompt: PROMPTS.stage4_api,
+            userPrompt,
+            temperature: 0.3,
+            maxTokens: 2000,
+          });
+          if (Array.isArray(result)) {
+            for (const endpoint of result) {
+              const key = `${endpoint.method}:${endpoint.path}`;
+              if (!seenPaths.has(key)) {
+                seenPaths.add(key);
+                allEndpoints.push(endpoint);
+              }
+            }
+          }
+        } catch (error) {
+          logger.warning(`Stage 4: failed to analyze ${file.path}${chunkNote}: ${(error as Error).message}`);
+        }
       }
-
-      return stageResult;
-    } catch (error) {
-      return {
-        stage: 'api',
-        success: false,
-        error: (error as Error).message,
-        data: [],
-        tokens: 0,
-        duration: Date.now() - startTime,
-      };
     }
+
+    const stageResult: StageResult<ExtractedEndpoint[]> = {
+      stage: 'api',
+      success: true,
+      data: allEndpoints,
+      tokens: this.llm.getTokenUsage().totalTokens,
+      duration: Date.now() - startTime,
+    };
+
+    if (this.options.saveIntermediate) {
+      await this.saveResult('stage4-api', stageResult);
+    }
+
+    return stageResult;
   }
 
   /**
@@ -979,21 +1035,38 @@ ${architecture.keyDecisions.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
 
   /**
    * Resolve file paths identified by Stage 1 LLM to actual file content.
-   * Falls back to the provided heuristic list if no LLM-identified paths match.
+   * First looks in phase2_deep (already in memory); if not found and rootPath is set,
+   * reads the file from disk so that files outside the top-20 scored set can still
+   * be analyzed in later stages.
+   * Falls back to the provided heuristic list if no paths resolve.
    */
-  private resolveFiles(
+  private async resolveFiles(
     context: LLMContext,
     llmPaths: string[],
     fallback: Array<{ path: string; content: string }>
-  ): Array<{ path: string; content: string }> {
+  ): Promise<Array<{ path: string; content: string }>> {
     if (llmPaths.length === 0) return fallback;
 
     const allFiles = context.phase2_deep.files;
-    const resolved = llmPaths
-      .map(p => allFiles.find(f => f.path === p || f.path.endsWith('/' + p) || p.endsWith('/' + f.path)))
-      .filter((f): f is (typeof allFiles)[0] => f !== undefined)
-      .map(f => ({ path: f.path, content: f.content ?? '' }))
-      .filter(f => f.content.length > 0);
+    const resolved: Array<{ path: string; content: string }> = [];
+
+    for (const p of llmPaths) {
+      // 1. Look in phase2_deep (already loaded in memory)
+      const found = allFiles.find(f => f.path === p || f.path.endsWith('/' + p) || p.endsWith('/' + f.path));
+      if (found?.content) {
+        resolved.push({ path: found.path, content: found.content });
+        continue;
+      }
+      // 2. Read from disk when rootPath is configured (covers files outside phase2_deep)
+      if (this.options.rootPath) {
+        try {
+          const content = await readFile(join(this.options.rootPath, p), 'utf-8');
+          resolved.push({ path: p, content });
+        } catch {
+          // file not found or unreadable — skip
+        }
+      }
+    }
 
     return resolved.length > 0 ? resolved : fallback;
   }

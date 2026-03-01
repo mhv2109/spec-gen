@@ -40,7 +40,7 @@ import { runAnalysis } from './analyze.js';
 import { analyzeForRefactoring } from '../../core/analyzer/refactor-analyzer.js';
 import { formatSignatureMaps } from '../../core/analyzer/signature-extractor.js';
 import type { LLMContext } from '../../core/analyzer/artifact-generator.js';
-import type { SerializedCallGraph } from '../../core/analyzer/call-graph.js';
+import type { SerializedCallGraph, FunctionNode } from '../../core/analyzer/call-graph.js';
 import type { MappingArtifact } from '../../core/generator/mapping-generator.js';
 
 // ============================================================================
@@ -187,6 +187,117 @@ const TOOL_DEFINITIONS = [
         orphansOnly: {
           type: 'boolean',
           description: 'Return only orphan functions (not covered by any requirement)',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  // ── Decision-aid tools ──────────────────────────────────────────────────────
+  {
+    name: 'analyze_impact',
+    description:
+      'Deep impact analysis for a specific function or symbol. Returns fan-in, fan-out, ' +
+      'upstream call chain, downstream critical path, a risk score (0–100), blast radius ' +
+      'estimation, and a recommended refactoring strategy. Use this before touching any ' +
+      'function to understand the full consequences. Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        symbol: {
+          type: 'string',
+          description: 'Function or method name to analyse (exact or partial match)',
+        },
+        depth: {
+          type: 'number',
+          description: 'Traversal depth for upstream/downstream chains (default: 2)',
+        },
+      },
+      required: ['directory', 'symbol'],
+    },
+  },
+  {
+    name: 'get_low_risk_refactor_candidates',
+    description:
+      'Return the safest functions to refactor first: low fan-in (few callers), ' +
+      'low fan-out (few dependencies), no cyclic involvement, not a hub. ' +
+      'Ideal starting point for incremental, low-risk refactoring sessions. ' +
+      'Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of candidates to return (default: 5)',
+        },
+        filePattern: {
+          type: 'string',
+          description: 'Optional substring to restrict candidates to matching file paths',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  {
+    name: 'get_leaf_functions',
+    description:
+      'Return functions that make no internal calls (leaves of the call graph). ' +
+      'These are the safest refactoring targets: self-contained, easy to unit-test, ' +
+      'zero downstream blast radius. Best entry point for bottom-up refactoring. ' +
+      'Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 20)',
+        },
+        filePattern: {
+          type: 'string',
+          description: 'Optional substring to restrict results to matching file paths',
+        },
+        sortBy: {
+          type: 'string',
+          enum: ['fanIn', 'name', 'file'],
+          description:
+            'Sort order: "fanIn" (most-called leaves first, default), "name", or "file"',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  {
+    name: 'get_critical_hubs',
+    description:
+      'Return the highest-impact hub functions: high fan-in (many callers depend on them), ' +
+      'possibly high fan-out (god functions). These require the most careful, incremental ' +
+      'refactoring with broad test coverage. Includes a stability score and recommended ' +
+      'approach (extract, split, facade, delegate). Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of hubs to return (default: 10)',
+        },
+        minFanIn: {
+          type: 'number',
+          description: 'Minimum fan-in threshold to be considered a hub (default: 3)',
         },
       },
       required: ['directory'],
@@ -487,6 +598,460 @@ async function handleGetMapping(
   };
 }
 
+// ============================================================================
+// DECISION-AID HELPERS (shared across the 4 new tools)
+// ============================================================================
+
+/**
+ * Build forward (caller→callees) and backward (callee→callers) adjacency maps
+ * from a serialised call graph, returning both maps and a node lookup.
+ */
+function buildAdjacency(cg: SerializedCallGraph) {
+  const nodeMap = new Map(cg.nodes.map(n => [n.id, n]));
+  const forward  = new Map<string, Set<string>>(); // callerId → Set<calleeId>
+  const backward = new Map<string, Set<string>>(); // calleeId → Set<callerId>
+
+  for (const n of cg.nodes) {
+    forward.set(n.id, new Set());
+    backward.set(n.id, new Set());
+  }
+  for (const e of cg.edges) {
+    if (!e.calleeId) continue;
+    forward.get(e.callerId)?.add(e.calleeId);
+    backward.get(e.calleeId)?.add(e.callerId);
+  }
+  return { nodeMap, forward, backward };
+}
+
+/** BFS up to `maxDepth`. Returns a map of visited node-id → depth reached. */
+function bfs(
+  seeds: string[],
+  adjacency: Map<string, Set<string>>,
+  maxDepth: number
+): Map<string, number> {
+  const visited = new Map<string, number>();
+  const queue: Array<{ id: string; depth: number }> = seeds.map(id => ({ id, depth: 0 }));
+  for (const id of seeds) visited.set(id, 0);
+
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift()!;
+    if (depth >= maxDepth) continue;
+    for (const nId of adjacency.get(id) ?? []) {
+      if (!visited.has(nId)) {
+        visited.set(nId, depth + 1);
+        queue.push({ id: nId, depth: depth + 1 });
+      }
+    }
+  }
+  return visited;
+}
+
+/**
+ * Compute a risk score [0–100] for a node.
+ *
+ * Weights:
+ *   fan-in  × 4   — callers that break if we touch this
+ *   fan-out × 2   — dependencies we must preserve
+ *   isHub   × 20  — structural node flagged by the analyser
+ *   blastRadius × 1.5
+ *
+ * Capped at 100.
+ */
+function computeRiskScore(node: FunctionNode, blastRadius: number, isHub: boolean): number {
+  const raw =
+    (node.fanIn  ?? 0) * 4 +
+    (node.fanOut ?? 0) * 2 +
+    (isHub ? 20 : 0) +
+    blastRadius * 1.5;
+  return Math.min(100, Math.round(raw));
+}
+
+/**
+ * Derive a plain-language refactoring strategy from the risk profile.
+ * Returns a short `approach` label and a longer `rationale`.
+ */
+function recommendStrategy(
+  riskScore: number,
+  fanIn: number,
+  fanOut: number,
+  isHub: boolean
+): { approach: string; rationale: string } {
+  if (riskScore <= 20) {
+    return {
+      approach: 'refactor freely',
+      rationale:
+        'Low fan-in and fan-out. Safe to rename, extract, or rewrite inline. ' +
+        'A single PR with unit tests is sufficient.',
+    };
+  }
+  if (riskScore <= 45) {
+    return {
+      approach: 'refactor with tests',
+      rationale:
+        'Moderate caller count. Write characterisation tests before changing the signature. ' +
+        'Prefer additive changes (new overload / wrapper) then migrate callers.',
+    };
+  }
+  if (isHub && fanOut > 5) {
+    return {
+      approach: 'split responsibility (SRP)',
+      rationale:
+        'God-function: high fan-in AND high fan-out. Extract cohesive sub-responsibilities ' +
+        'into smaller functions behind a thin façade. Migrate callers incrementally.',
+    };
+  }
+  if (isHub) {
+    return {
+      approach: 'introduce façade',
+      rationale:
+        'Critical hub with many callers. Do not change the public signature. ' +
+        'Introduce a façade or adapter layer, move logic behind it, ' +
+        'then update callers in waves.',
+    };
+  }
+  if (fanOut > 8) {
+    return {
+      approach: 'decompose fan-out',
+      rationale:
+        'Too many outgoing dependencies. Extract orchestration logic into smaller coordinators. ' +
+        'Consider dependency injection to decouple from concrete callees.',
+    };
+  }
+  return {
+    approach: 'incremental extraction',
+    rationale:
+      'High risk due to caller count. Use the Strangler-Fig pattern: introduce a parallel ' +
+      'implementation, migrate callers one by one, then delete the original.',
+  };
+}
+
+function nodeToSummary(n: FunctionNode | undefined) {
+  if (!n) return { name: '', file: '', className: null, depth: 0 };
+  return { name: n.name, file: n.filePath, className: n.className ?? null, depth: 0 };
+}
+
+// ============================================================================
+// DECISION-AID TOOL HANDLERS
+// ============================================================================
+
+/**
+ * Deep impact analysis for a single symbol.
+ *
+ * `symbol` is matched case-insensitively as a substring; when multiple nodes
+ * match (overloads / same name across files), each is analysed independently
+ * and results are returned as a `matches` array.
+ *
+ * Walks upstream (who calls it) and downstream (what it calls) up to `depth`
+ * hops, computes a risk score [0–100], and recommends a refactoring strategy.
+ * Requires a prior `analyze_codebase` call.
+ */
+async function handleAnalyzeImpact(
+  directory: string,
+  symbol: string,
+  depth = 2
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const ctx = await readCachedContext(absDir);
+
+  if (!ctx)           return { error: 'No analysis found. Run analyze_codebase first.' };
+  if (!ctx.callGraph) return { error: 'Call graph not available. Re-run analyze_codebase.' };
+
+  const cg = ctx.callGraph as SerializedCallGraph;
+  const { nodeMap, forward, backward } = buildAdjacency(cg);
+  const hubIds = new Set(cg.hubFunctions.map(n => n.id));
+
+  // Find seed nodes — all functions whose name contains symbol (case-insensitive)
+  const lower = symbol.toLowerCase();
+  const seeds = cg.nodes.filter(n => n.name.toLowerCase().includes(lower));
+  if (seeds.length === 0) {
+    return { error: `No function matching "${symbol}" found in call graph.` };
+  }
+
+  const seedIds = seeds.map(n => n.id);
+
+  // BFS upstream (callers) and downstream (callees)
+  const upstreamMap   = bfs(seedIds, backward, depth);
+  const downstreamMap = bfs(seedIds, forward,  depth);
+
+  // Exclude seeds themselves from blast-radius counts
+  const upstreamNodes = [...upstreamMap.entries()]
+    .filter(([id]) => !seedIds.includes(id))
+    .map(([id, d]) => ({ ...nodeToSummary(nodeMap.get(id)), depth: d }))
+    .filter(n => n.name);
+
+  const downstreamNodes = [...downstreamMap.entries()]
+    .filter(([id]) => !seedIds.includes(id))
+    .map(([id, d]) => ({ ...nodeToSummary(nodeMap.get(id)), depth: d }))
+    .filter(n => n.name);
+
+  const blastRadius = upstreamNodes.length + downstreamNodes.length;
+
+  const results = seeds.map(seed => {
+    const isHub     = hubIds.has(seed.id);
+    const riskScore = computeRiskScore(seed, blastRadius, isHub);
+    const strategy  = recommendStrategy(riskScore, seed.fanIn ?? 0, seed.fanOut ?? 0, isHub);
+
+    // Leaf nodes of the downstream chain (deepest reachable nodes = critical path extremities)
+    const criticalPathLeaves = downstreamNodes
+      .filter(n => n.depth === depth)
+      .map(n => n.name);
+
+    return {
+      symbol:    seed.name,
+      file:      seed.filePath,
+      className: seed.className ?? null,
+      language:  seed.language,
+      metrics: {
+        fanIn:  seed.fanIn  ?? 0,
+        fanOut: seed.fanOut ?? 0,
+        isHub,
+      },
+      blastRadius: {
+        total:      blastRadius,
+        upstream:   upstreamNodes.length,
+        downstream: downstreamNodes.length,
+      },
+      riskScore,
+      riskLevel:
+        riskScore <= 20 ? 'low'
+        : riskScore <= 45 ? 'medium'
+        : riskScore <= 70 ? 'high'
+        : 'critical',
+      upstreamChain:          upstreamNodes,
+      downstreamCriticalPath: downstreamNodes,
+      criticalPathLeaves,
+      recommendedStrategy: strategy,
+    };
+  });
+
+  return seeds.length === 1 ? results[0] : { matches: results };
+}
+
+/**
+ * Return the N safest functions to refactor:
+ *   - fan-in  ≤ 2   (few callers)
+ *   - fan-out ≤ 3   (few dependencies)
+ *   - not a hub
+ *   - not an entry point (those carry implicit public-API risk)
+ *
+ * Sorted by ascending composite risk (fanIn + fanOut), then name.
+ * Requires a prior `analyze_codebase` call.
+ */
+async function handleGetLowRiskRefactorCandidates(
+  directory: string,
+  limit = 5,
+  filePattern?: string
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const ctx = await readCachedContext(absDir);
+
+  if (!ctx)           return { error: 'No analysis found. Run analyze_codebase first.' };
+  if (!ctx.callGraph) return { error: 'Call graph not available. Re-run analyze_codebase.' };
+
+  const cg       = ctx.callGraph as SerializedCallGraph;
+  const hubIds   = new Set(cg.hubFunctions.map(n => n.id));
+  const entryIds = new Set(cg.entryPoints.map(n => n.id));
+
+  let candidates = cg.nodes.filter(n => {
+    const fanIn  = n.fanIn  ?? 0;
+    const fanOut = n.fanOut ?? 0;
+    return fanIn <= 2 && fanOut <= 3 && !hubIds.has(n.id) && !entryIds.has(n.id);
+  });
+
+  if (filePattern) {
+    candidates = candidates.filter(n => n.filePath.includes(filePattern));
+  }
+
+  // Sort: lowest combined risk first, break ties by name
+  candidates.sort((a, b) => {
+    const ra = (a.fanIn ?? 0) + (a.fanOut ?? 0);
+    const rb = (b.fanIn ?? 0) + (b.fanOut ?? 0);
+    return ra !== rb ? ra - rb : a.name.localeCompare(b.name);
+  });
+
+  const top = candidates.slice(0, limit).map(n => ({
+    name:      n.name,
+    file:      n.filePath,
+    className: n.className ?? null,
+    language:  n.language,
+    fanIn:     n.fanIn  ?? 0,
+    fanOut:    n.fanOut ?? 0,
+    riskScore: computeRiskScore(n, 0, false),
+    rationale: 'Low fan-in, low fan-out, not a hub — safe to rename, extract, or rewrite.',
+  }));
+
+  return {
+    total:      candidates.length,
+    returned:   top.length,
+    candidates: top,
+    tip: 'Start with the first candidate and work downward. Each can be changed in isolation.',
+  };
+}
+
+/**
+ * Return leaf functions (fan-out === 0 — no outgoing internal calls).
+ *
+ * Leaves are the safest possible refactoring targets: zero downstream blast
+ * radius. Nodes with `fanIn === 0` are additionally flagged as likely dead code.
+ *
+ * Sort order:
+ *   `"fanIn"` (default) — most-called leaves first (best unit-test ROI)
+ *   `"name"`            — alphabetical
+ *   `"file"`            — grouped by file path
+ *
+ * Requires a prior `analyze_codebase` call.
+ */
+async function handleGetLeafFunctions(
+  directory: string,
+  limit = 20,
+  filePattern?: string,
+  sortBy: 'fanIn' | 'name' | 'file' = 'fanIn'
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const ctx = await readCachedContext(absDir);
+
+  if (!ctx)           return { error: 'No analysis found. Run analyze_codebase first.' };
+  if (!ctx.callGraph) return { error: 'Call graph not available. Re-run analyze_codebase.' };
+
+  const cg = ctx.callGraph as SerializedCallGraph;
+
+  // A leaf has no outgoing edges to other internal nodes
+  const hasOutgoing = new Set(cg.edges.filter(e => e.calleeId).map(e => e.callerId));
+  let leaves = cg.nodes.filter(n => !hasOutgoing.has(n.id));
+
+  if (filePattern) {
+    leaves = leaves.filter(n => n.filePath.includes(filePattern));
+  }
+
+  leaves.sort((a, b) => {
+    if (sortBy === 'fanIn') return (b.fanIn ?? 0) - (a.fanIn ?? 0);
+    if (sortBy === 'name')  return a.name.localeCompare(b.name);
+    return a.filePath.localeCompare(b.filePath) || a.name.localeCompare(b.name);
+  });
+
+  const top = leaves.slice(0, limit).map(n => ({
+    name:           n.name,
+    file:           n.filePath,
+    className:      n.className ?? null,
+    language:       n.language,
+    fanIn:          n.fanIn  ?? 0,
+    fanOut:         0,
+    blastRadius:    0,
+    riskScore:      computeRiskScore(n, 0, false),
+    refactorAdvice: (n.fanIn ?? 0) === 0
+      ? 'Unreachable or dead code — safe to delete after confirmation.'
+      : 'Pure leaf: rewrite freely, then re-run tests for its callers.',
+  }));
+
+  return {
+    totalLeaves: leaves.length,
+    returned:    top.length,
+    sortedBy:    sortBy,
+    leaves:      top,
+    insight:
+      'Refactoring leaves bottom-up lets you build confidence and test coverage ' +
+      'before tackling higher-risk hubs.',
+  };
+}
+
+/**
+ * Return critical hub functions ranked by composite criticality:
+ *   `criticality = fanIn × 3 + fanOut × 1.5 + (layerViolation ? 10 : 0)`
+ *
+ * Each hub receives:
+ *   - `stabilityScore` (0–100, inverse of criticality) — higher = easier to touch now
+ *   - `recommendedApproach`: extract | split | facade | delegate
+ *   - `refactoringOrder`: guidance on when to tackle this hub relative to its dependencies
+ *
+ * Requires a prior `analyze_codebase` call.
+ */
+async function handleGetCriticalHubs(
+  directory: string,
+  limit = 10,
+  minFanIn = 3
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const ctx = await readCachedContext(absDir);
+
+  if (!ctx)           return { error: 'No analysis found. Run analyze_codebase first.' };
+  if (!ctx.callGraph) return { error: 'Call graph not available. Re-run analyze_codebase.' };
+
+  const cg = ctx.callGraph as SerializedCallGraph;
+  const nodeMap = new Map(cg.nodes.map(n => [n.id, n]));
+  const violatorFiles = new Set(
+    cg.layerViolations.flatMap(v =>
+      [nodeMap.get(v.callerId)?.filePath, nodeMap.get(v.calleeId)?.filePath]
+        .filter(Boolean) as string[]
+    )
+  );
+
+  const hubs = cg.nodes
+    .filter(n => (n.fanIn ?? 0) >= minFanIn)
+    .map(n => {
+      const fanIn        = n.fanIn  ?? 0;
+      const fanOut       = n.fanOut ?? 0;
+      const hasViolation = violatorFiles.has(n.filePath);
+      const criticality  = fanIn * 3 + fanOut * 1.5 + (hasViolation ? 10 : 0);
+      const stabilityScore = Math.max(0, Math.round(100 - Math.min(100, criticality)));
+
+      let approach: string;
+      let approachRationale: string;
+      if (fanIn >= 8 && fanOut >= 5) {
+        approach = 'split responsibility';
+        approachRationale =
+          'God-function: extract cohesive groups of callees into dedicated modules ' +
+          'and expose a minimal coordinator interface.';
+      } else if (fanIn >= 8) {
+        approach = 'introduce façade';
+        approachRationale =
+          'Heavily depended-upon: keep the signature stable, move implementation behind ' +
+          'a façade, then migrate callers to the new interface over time.';
+      } else if (fanOut >= 5) {
+        approach = 'delegate';
+        approachRationale =
+          'Too many outgoing calls: extract groups of related calls into helper services ' +
+          'and delegate to them, reducing this function\'s orchestration burden.';
+      } else {
+        approach = 'extract';
+        approachRationale =
+          'Moderate hub: identify the core responsibility, extract secondary logic into ' +
+          'well-named helpers, and add integration tests before changing callers.';
+      }
+
+      return {
+        name:              n.name,
+        file:              n.filePath,
+        className:         n.className ?? null,
+        language:          n.language,
+        fanIn,
+        fanOut,
+        hasLayerViolation: hasViolation,
+        criticality:       Math.round(criticality * 10) / 10,
+        stabilityScore,
+        riskScore:         computeRiskScore(n, fanIn + fanOut, true),
+        recommendedApproach: { approach, rationale: approachRationale },
+        refactoringOrder:
+          stabilityScore >= 60
+            ? 'can refactor now with good test coverage'
+            : stabilityScore >= 30
+            ? 'refactor after stabilising its leaf dependencies'
+            : 'defer — stabilise surrounding code first, then tackle incrementally',
+      };
+    })
+    .sort((a, b) => b.criticality - a.criticality)
+    .slice(0, limit);
+
+  return {
+    totalHubs: cg.nodes.filter(n => (n.fanIn ?? 0) >= minFanIn).length,
+    returned:  hubs.length,
+    minFanIn,
+    hubs,
+    guidance:
+      'Start with hubs that have the highest stabilityScore (easiest wins). ' +
+      'Defer hubs with stabilityScore < 30 until their dependencies are cleaner.',
+  };
+}
+
 /**
  * Extract a depth-limited subgraph centred on a named function.
  *
@@ -668,6 +1233,22 @@ async function startMcpServer(): Promise<void> {
       } else if (name === 'get_mapping') {
         const { directory, domain, orphansOnly } = args as { directory: string; domain?: string; orphansOnly?: boolean };
         result = await handleGetMapping(directory, domain, orphansOnly);
+      } else if (name === 'analyze_impact') {
+        const { directory, symbol, depth = 2 } =
+          args as { directory: string; symbol: string; depth?: number };
+        result = await handleAnalyzeImpact(directory, symbol, depth);
+      } else if (name === 'get_low_risk_refactor_candidates') {
+        const { directory, limit = 5, filePattern } =
+          args as { directory: string; limit?: number; filePattern?: string };
+        result = await handleGetLowRiskRefactorCandidates(directory, limit, filePattern);
+      } else if (name === 'get_leaf_functions') {
+        const { directory, limit = 20, filePattern, sortBy = 'fanIn' } =
+          args as { directory: string; limit?: number; filePattern?: string; sortBy?: 'fanIn' | 'name' | 'file' };
+        result = await handleGetLeafFunctions(directory, limit, filePattern, sortBy);
+      } else if (name === 'get_critical_hubs') {
+        const { directory, limit = 10, minFanIn = 3 } =
+          args as { directory: string; limit?: number; minFanIn?: number };
+        result = await handleGetCriticalHubs(directory, limit, minFanIn);
       } else {
         return {
           content: [{ type: 'text', text: `Unknown tool: ${name}` }],

@@ -16,6 +16,7 @@ import {
 } from '../../core/services/config-manager.js';
 import {
   createLLMService,
+  lookupPricing,
   type LLMService,
 } from '../../core/services/llm-service.js';
 import {
@@ -151,40 +152,42 @@ async function loadAnalysis(analysisPath: string): Promise<AnalysisData | null> 
 }
 
 /**
- * Estimate cost for generation
+ * Estimate cost for the full generation pipeline (all stages).
+ *
+ * The pipeline makes multiple LLM calls:
+ *   Stage 1 — 1 call  (survey)
+ *   Stage 2 — 1 call per phase2_deep file  (entity extraction)
+ *   Stage 3 — 1 call per phase2_deep file  (service analysis, same files as Stage 2)
+ *   Stage 4 — 1 call  (API extraction, condensed context)
+ *   Stage 5 — 1 call  (architecture synthesis, full context)
+ *   Stage 6 — 1 call  (ADR, optional — not counted here)
  */
-function estimateCost(llmContext: LLMContext, model: string): { tokens: number; cost: number } {
-  // Estimate input tokens from context
-  let totalTokens = 0;
+function estimateCost(
+  llmContext: LLMContext,
+  provider: string,
+  model: string
+): { tokens: number; cost: number } {
+  const OVERHEAD = 500;      // system prompt per call (tokens)
+  const OUTPUT_RATIO = 0.4;  // output ≈ 40% of input for spec tasks
 
-  // Phase 1 survey context
-  totalTokens += llmContext.phase1_survey.estimatedTokens ?? 2000;
+  const phase2Files = llmContext.phase2_deep.files;
+  const phase2Total = phase2Files.reduce((s, f) => s + f.tokens, 0);
+  const fileOverhead = OVERHEAD * phase2Files.length;
 
-  // Phase 2 deep analysis
-  for (const file of llmContext.phase2_deep.files) {
-    totalTokens += file.tokens;
-  }
+  const stage1Input = (llmContext.phase1_survey.estimatedTokens ?? 2000) + OVERHEAD;
+  const stage2Input = phase2Total + fileOverhead;                        // entity extraction
+  const stage3Input = phase2Total + fileOverhead;                        // service analysis (same files)
+  const stage4Input = Math.ceil(phase2Total * 0.5) + OVERHEAD;           // API extraction
+  const stage5Input = Math.ceil((stage1Input + stage2Input) * 0.3) + OVERHEAD; // architecture
 
-  // Add estimated output tokens (roughly 30% of input)
-  const outputTokens = Math.ceil(totalTokens * 0.3);
-  totalTokens += outputTokens;
+  const totalInput = stage1Input + stage2Input + stage3Input + stage4Input + stage5Input;
+  const totalOutput = Math.ceil(totalInput * OUTPUT_RATIO);
 
-  // Pricing per 1M tokens (simplified)
-  const pricing: Record<string, { input: number; output: number }> = {
-    'claude-sonnet-4-20250514': { input: 3.0, output: 15.0 },
-    'claude-3-5-sonnet-20241022': { input: 3.0, output: 15.0 },
-    'claude-opus-4-20250514': { input: 15.0, output: 75.0 },
-    'gpt-4o': { input: 5.0, output: 15.0 },
-    'gpt-4o-mini': { input: 0.15, output: 0.6 },
-    default: { input: 3.0, output: 15.0 },
-  };
+  const modelPricing = lookupPricing(provider, model);
+  const cost = (totalInput / 1_000_000) * modelPricing.input
+             + (totalOutput / 1_000_000) * modelPricing.output;
 
-  const modelPricing = pricing[model] ?? pricing.default;
-  const inputCost = (totalTokens * 0.7 / 1_000_000) * modelPricing.input;
-  const outputCost = (outputTokens / 1_000_000) * modelPricing.output;
-  const cost = inputCost + outputCost;
-
-  return { tokens: totalTokens, cost };
+  return { tokens: totalInput + totalOutput, cost };
 }
 
 /**
@@ -451,7 +454,7 @@ Each spec.md follows OpenSpec conventions:
       }
 
       // Estimate cost
-      const estimate = estimateCost(llmContext, effectiveModel);
+      const estimate = estimateCost(llmContext, effectiveProvider, effectiveModel);
       logger.info('Model', effectiveModel);
       logger.info('Estimated tokens', estimate.tokens.toLocaleString());
       logger.inference(`Estimated cost: ~$${estimate.cost.toFixed(2)}`);

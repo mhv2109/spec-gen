@@ -151,42 +151,93 @@ function normalizeApiBase(url: string): string {
 }
 
 // ============================================================================
-// PRICING (per 1M tokens as of 2024)
+// PRICING (per 1M tokens)
 // ============================================================================
 
-const PRICING = {
+const PRICING: Record<string, Record<string, { input: number; output: number }>> = {
   anthropic: {
-    'claude-3-5-sonnet-20241022': { input: 3.0, output: 15.0 },
-    'claude-3-opus-20240229': { input: 15.0, output: 75.0 },
-    'claude-3-sonnet-20240229': { input: 3.0, output: 15.0 },
-    'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
+    // Claude 4 family
+    'claude-opus-4':    { input: 15.0, output: 75.0 },
+    'claude-sonnet-4':  { input: 3.0,  output: 15.0 },
+    'claude-haiku-4':   { input: 0.80, output: 4.0  },
+    // Claude 3.7 / 3.5
+    'claude-3-7-sonnet': { input: 3.0,  output: 15.0 },
+    'claude-3-5-sonnet': { input: 3.0,  output: 15.0 },
+    'claude-3-5-haiku':  { input: 0.80, output: 4.0  },
+    // Claude 3 (legacy)
+    'claude-3-opus':    { input: 15.0, output: 75.0 },
+    'claude-3-sonnet':  { input: 3.0,  output: 15.0 },
+    'claude-3-haiku':   { input: 0.25, output: 1.25 },
+    // Fallback: assume Sonnet-class pricing
     default: { input: 3.0, output: 15.0 },
   },
   openai: {
-    'gpt-4-turbo': { input: 10.0, output: 30.0 },
-    'gpt-4': { input: 30.0, output: 60.0 },
-    'gpt-4o': { input: 5.0, output: 15.0 },
-    'gpt-4o-mini': { input: 0.15, output: 0.6 },
-    'gpt-3.5-turbo': { input: 0.5, output: 1.5 },
-    default: { input: 5.0, output: 15.0 },
+    // GPT-4o family
+    'gpt-4o':              { input: 2.5,  output: 10.0 },
+    'gpt-4o-mini':         { input: 0.15, output: 0.6  },
+    // o-series reasoning models
+    'o1':                  { input: 15.0, output: 60.0 },
+    'o1-mini':             { input: 3.0,  output: 12.0 },
+    'o3':                  { input: 10.0, output: 40.0 },
+    'o3-mini':             { input: 1.1,  output: 4.4  },
+    'o4-mini':             { input: 1.1,  output: 4.4  },
+    // Legacy (still in use)
+    'gpt-4-turbo':         { input: 10.0, output: 30.0 },
+    'gpt-4':               { input: 30.0, output: 60.0 },
+    'gpt-3.5-turbo':       { input: 0.5,  output: 1.5  },
+    default: { input: 2.5, output: 10.0 },
   },
   'openai-compat': {
-    // Common OpenAI-compatible models — extend as needed
-    'mistral-large-latest': { input: 2.0, output: 6.0 },
-    'mistral-small-latest': { input: 0.1, output: 0.3 },
-    'codestral-latest': { input: 0.2, output: 0.6 },
-    'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 }, // Groq
-    'llama-3.1-8b-instant': { input: 0.05, output: 0.08 },   // Groq
+    // Mistral
+    'mistral-large-latest':  { input: 2.0,  output: 6.0  },
+    'mistral-small-latest':  { input: 0.1,  output: 0.3  },
+    'codestral-latest':      { input: 0.2,  output: 0.6  },
+    // Groq
+    'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 },
+    'llama-3.1-8b-instant':    { input: 0.05, output: 0.08 },
     default: { input: 1.0, output: 3.0 },
   },
   gemini: {
-    'gemini-2.0-flash': { input: 0.1, output: 0.4 },
-    'gemini-2.0-flash-lite': { input: 0.075, output: 0.3 },
-    'gemini-1.5-pro': { input: 1.25, output: 5.0 },
-    'gemini-1.5-flash': { input: 0.075, output: 0.3 },
+    'gemini-2.0-flash':      { input: 0.1,   output: 0.4  },
+    'gemini-2.0-flash-lite': { input: 0.075, output: 0.3  },
+    'gemini-2.5-pro':        { input: 1.25,  output: 10.0 },
+    'gemini-1.5-pro':        { input: 1.25,  output: 5.0  },
+    'gemini-1.5-flash':      { input: 0.075, output: 0.3  },
     default: { input: 0.1, output: 0.4 },
   },
 };
+
+/**
+ * Exported for use in pre-flight cost estimation.
+ * Look up pricing for a model ID using prefix/family matching.
+ * Exact match first, then longest prefix match, then provider default.
+ *
+ * This is robust to minor version suffixes like "claude-sonnet-4-6-20251120"
+ * matching the "claude-sonnet-4" family entry.
+ */
+export function lookupPricing(
+  providerName: string,
+  modelId: string
+): { input: number; output: number } {
+  const table = PRICING[providerName] ?? PRICING.anthropic;
+
+  // 1. Exact match
+  if (table[modelId]) return table[modelId];
+
+  // 2. Longest prefix match (handles "claude-sonnet-4-6-20251120" → "claude-sonnet-4")
+  const modelLower = modelId.toLowerCase();
+  let bestKey = '';
+  for (const key of Object.keys(table)) {
+    if (key === 'default') continue;
+    if (modelLower.startsWith(key) && key.length > bestKey.length) {
+      bestKey = key;
+    }
+  }
+  if (bestKey) return table[bestKey];
+
+  // 3. Provider default
+  return table.default ?? { input: 3.0, output: 15.0 };
+}
 
 // ============================================================================
 // TOKEN ESTIMATION
@@ -877,12 +928,9 @@ export class LLMService {
    * Calculate cost for a response
    */
   private calculateCost(response: CompletionResponse): number {
-    const providerPricing = PRICING[this.provider.name as keyof typeof PRICING] ?? PRICING.anthropic;
-    const modelPricing = providerPricing[response.model as keyof typeof providerPricing] ?? providerPricing.default;
-
+    const modelPricing = lookupPricing(this.provider.name, response.model);
     const inputCost = (response.usage.inputTokens / 1_000_000) * modelPricing.input;
     const outputCost = (response.usage.outputTokens / 1_000_000) * modelPricing.output;
-
     return inputCost + outputCost;
   }
 

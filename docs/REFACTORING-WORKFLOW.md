@@ -18,6 +18,48 @@ spec-gen analyze     # static analysis — no LLM, builds dependency graph
 - `.spec-gen/config.json` — configuration
 - `.spec-gen/analysis/repo-structure.json` — file significance scores, domain detection
 - `.spec-gen/analysis/dependency-graph.json` — exports, imports, connectivity per file
+- `.spec-gen/analysis/refactor-priorities.json` — **static refactoring candidates** (see §2b)
+
+---
+
+## 1b. Read the Static Refactoring Report  *(no LLM required)*
+
+`analyze` runs a **pure static call graph analysis** (no LLM) and immediately
+produces `.spec-gen/analysis/refactor-priorities.json`. The console output
+shows a summary:
+
+```
+Refactoring Candidates  (7/266 functions):
+  2 hub overload  ·  5 god function
+
+  check_authentication  auth.py      fanOut=15
+  crawl_json_api_async  crawler.py   fanOut=14
+  t                     i18n.py      fanIn=25
+  ...
+  → .spec-gen/analysis/refactor-priorities.json
+```
+
+**Issue types detected:**
+
+| Issue | Meaning | Threshold |
+|---|---|---|
+| `high_fan_in` | Called by too many others — likely a hub utility | fanIn ≥ 8 |
+| `high_fan_out` | Calls too many others — likely a god function / orchestrator | fanOut ≥ 8 |
+| `multi_requirement` | Implements too many spec requirements — SRP violation | > 2 requirements |
+| `in_cycle` | Part of a cyclic call dependency | SCC size > 1 |
+| `unreachable` | Not reachable from any entry point and not in any spec | depth = -1 |
+
+**Notes on interpretation:**
+- `high_fan_out` on an entry point (CLI command, route handler) is expected
+  and less urgent than `high_fan_out` on a mid-layer service
+- `high_fan_in` on logger or pure-utility functions is suppressed automatically
+- Test files are excluded from the analysis
+- `unreachable` functions are dead-code candidates, but verify first: they may
+  be public API consumed externally, or re-exported from an index file
+
+**At this stage `requirements` is always empty** — the mapping from
+requirements to functions is only available after `spec-gen generate` has run
+(see §4). Re-run `analyze` after a generate to get the enriched report.
 
 ---
 
@@ -133,6 +175,68 @@ validates cleanly. **Only proceed to refactoring once the spec is trusted.**
 
 ---
 
+## 4b. Re-analyze to Enrich Refactoring Priorities  *(no LLM required)*
+
+After `generate` has produced `mapping.json`, re-run `analyze` to enrich the
+refactoring report with **requirement mappings**:
+
+```bash
+spec-gen analyze
+```
+
+The updated `refactor-priorities.json` now includes a `requirements` field per
+function — making it possible to detect **SRP violations** (functions that
+implement too many requirements):
+
+```json
+{
+  "function": "check_authentication",
+  "file": "auth.py",
+  "fanIn": 3,
+  "fanOut": 15,
+  "requirements": ["Authenticate User", "Validate Token", "Refresh Session"],
+  "issues": ["high_fan_out", "multi_requirement"],
+  "priorityScore": 7.5
+}
+```
+
+The full report structure:
+
+```json
+{
+  "generatedAt": "...",
+  "stats": {
+    "totalFunctions": 266,
+    "withIssues": 7,
+    "unreachable": 0,
+    "highFanIn": 2,
+    "highFanOut": 5,
+    "srpViolations": 1,
+    "cycleParticipants": 0,
+    "cyclesDetected": 0
+  },
+  "priorities": [ ... ],   // sorted by priorityScore descending
+  "cycles": [ ... ]        // each cycle: { sccId, size, participants[] }
+}
+```
+
+**Using the report with an AI assistant:**
+
+```bash
+# Extract top refactoring candidates with their requirements
+cat .spec-gen/analysis/refactor-priorities.json | \
+  jq '[.priorities[] | {function, file, issues, requirements, priorityScore}] | .[0:10]'
+```
+
+Paste the output to an AI with instructions like:
+```
+These functions have structural issues identified by static analysis.
+For each one, suggest how to split or simplify it:
+[paste output]
+```
+
+---
+
 ## 5. Refactoring Actions
 
 ### 5a. Dead Code Detection
@@ -187,18 +291,39 @@ spec-gen generate -y      # regenerate specs + mapping
 ```
 
 After each refactoring batch:
-1. Re-run `analyze` to update the dependency graph
+1. Re-run `analyze` to update the dependency graph and call graph
 2. Re-run `generate` to get a fresh mapping
-3. Check that `orphanCount` decreases and `mappedRequirements` increases
-4. Use `spec-gen drift` to verify specs still match the refactored code
+3. Re-run `analyze` again to enrich the refactoring report with the new mapping
+4. Check that `orphanCount` decreases and `mappedRequirements` increases
+5. Check that `withIssues` in `refactor-priorities.json` decreases
+6. Use `spec-gen drift` to verify specs still match the refactored code
 
 ---
 
 ## 7. AI-Assisted Refactoring
 
-The specs and mapping artifact are designed to be used as context for AI
-coding assistants (Claude, GPT-4, Cursor, etc.). The structured Markdown
-format is directly readable by any AI.
+The specs, mapping, and refactoring report are designed to be used as context
+for AI coding assistants (Claude, GPT-4, Cursor, etc.). The structured formats
+are directly readable by any AI.
+
+### 7a. Prioritize with the refactoring report first
+
+Before diving into domain-level refactoring, use `refactor-priorities.json` to
+identify which files and functions need the most attention:
+
+```bash
+# Top 10 by priority score, with their issues and requirements
+cat .spec-gen/analysis/refactor-priorities.json | \
+  jq '[.priorities[:10][] | {function, file, fanIn, fanOut, issues, requirements, priorityScore}]'
+
+# Only SRP violations (too many requirements)
+cat .spec-gen/analysis/refactor-priorities.json | \
+  jq '[.priorities[] | select(.issues | contains(["multi_requirement"]))]'
+
+# Only cyclic dependencies
+cat .spec-gen/analysis/refactor-priorities.json | \
+  jq '.cycles'
+```
 
 ### 8a. Refactor a domain with spec as context
 

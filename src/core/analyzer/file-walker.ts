@@ -362,6 +362,8 @@ export class FileWalker {
   private rootPath: string;
   private options: Required<FileWalkerOptions>;
   private ig: Ignore | null = null;
+  /** Separate ignore instance used to check if a file matches includePatterns. */
+  private igInclude: Ignore | null = null;
   private files: FileMetadata[] = [];
   private skippedCount = 0;
   private skippedReasons: Record<string, number> = {};
@@ -420,12 +422,17 @@ export class FileWalker {
    * Check if we should skip a file
    */
   private shouldSkipFile(relativePath: string, _fileName: string): boolean {
-    // Check against ignore patterns
+    // includePatterns override all exclusions — check first
+    if (this.igInclude && this.igInclude.ignores(relativePath)) {
+      return false;
+    }
+
+    // Check against ignore patterns (gitignore + excludePatterns)
     if (this.ig && this.ig.ignores(relativePath)) {
       return true;
     }
 
-    // Check exclude patterns against relative path
+    // Check exclude patterns against relative path (direct prefix match)
     for (const pattern of this.options.excludePatterns) {
       const normalized = pattern.replace(/\/\*\*$/, '').replace(/\/$/, '');
       if (relativePath === normalized || relativePath.startsWith(normalized + '/')) {
@@ -574,6 +581,17 @@ export class FileWalker {
     // Add user-specified exclude patterns
     for (const pattern of this.options.excludePatterns) {
       this.ig.add(pattern);
+    }
+
+    // includePatterns override gitignore/excludePatterns at file level.
+    // Add them as negated patterns so this.ig lets them through, and
+    // build a separate igInclude instance for the direct excludePatterns check.
+    if (this.options.includePatterns.length > 0) {
+      this.igInclude = ignore();
+      for (const pattern of this.options.includePatterns) {
+        this.ig.add('!' + pattern);
+        this.igInclude.add(pattern);
+      }
     }
 
     // Start walking from root

@@ -64,12 +64,12 @@ vi.mock('../../core/analyzer/artifact-generator.js', () => ({
 // HELPERS
 // ============================================================================
 
-const SPEC_GEN_CONFIG = (excludePatterns: string[]) =>
+const SPEC_GEN_CONFIG = (excludePatterns: string[], includePatterns: string[] = []) =>
   JSON.stringify({
     version: '1.0.0',
     projectType: 'python',
     openspecPath: './openspec',
-    analysis: { maxFiles: 500, includePatterns: [], excludePatterns },
+    analysis: { maxFiles: 500, includePatterns, excludePatterns },
     generation: { provider: 'openai', model: 'gpt-4', domains: 'auto' },
     createdAt: new Date().toISOString(),
     lastRun: null,
@@ -154,5 +154,40 @@ describe('runAnalysis integration — excludePatterns', () => {
     expect(paths.some(p => p.includes('main.py'))).toBe(true);
     expect(paths.some(p => p.includes('swagger'))).toBe(false);
     expect(paths.some(p => p.includes('legacy'))).toBe(false);
+  });
+
+  it('includePatterns override gitignore exclusions', async () => {
+    await createFile(tmpDir, '.spec-gen/config.json',
+      SPEC_GEN_CONFIG([], ['*.graphql']));
+
+    // schema.graphql gitignored — should be force-included
+    await createFile(tmpDir, '.gitignore', '*.graphql');
+    await createFile(tmpDir, 'app/main.py', 'def main(): pass');
+    await createFile(tmpDir, 'app/schema.graphql', 'type Query { hello: String }');
+
+    const { repoMap } = await runAnalysis(tmpDir, outputDir, {
+      maxFiles: 500, include: [], exclude: [],
+    });
+
+    const paths = repoMap.allFiles.map(f => f.path);
+
+    expect(paths.some(p => p.includes('main.py'))).toBe(true);
+    expect(paths.some(p => p.includes('schema.graphql'))).toBe(true);
+  });
+
+  it('caller-supplied includePatterns also override gitignore exclusions', async () => {
+    await createFile(tmpDir, '.spec-gen/config.json', SPEC_GEN_CONFIG([]));
+
+    await createFile(tmpDir, '.gitignore', '*.proto');
+    await createFile(tmpDir, 'app/main.py', 'def main(): pass');
+    await createFile(tmpDir, 'app/service.proto', 'syntax = "proto3";');
+
+    const { repoMap } = await runAnalysis(tmpDir, outputDir, {
+      maxFiles: 500, include: ['*.proto'], exclude: [],
+    });
+
+    const paths = repoMap.allFiles.map(f => f.path);
+
+    expect(paths.some(p => p.includes('service.proto'))).toBe(true);
   });
 });

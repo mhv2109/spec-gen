@@ -114,17 +114,20 @@ export async function runAnalysis(
 ): Promise<AnalysisResult> {
   const startTime = Date.now();
 
-  // Merge config excludePatterns with caller-supplied patterns so all entry
-  // points (CLI, MCP, …) automatically respect the project configuration.
+  // Merge config patterns with caller-supplied patterns so all entry points
+  // (CLI, MCP, …) automatically respect the project configuration.
   const specGenConfig = await readSpecGenConfig(rootPath);
   const configExclude = specGenConfig?.analysis.excludePatterns ?? [];
+  const configInclude = specGenConfig?.analysis.includePatterns ?? [];
   const mergedExclude = [...new Set([...configExclude, ...options.exclude])];
+  const mergedInclude = [...new Set([...configInclude, ...options.include])];
 
   // Phase 1: Repository Mapping
   logger.analysis('Scanning directory structure...');
 
   const mapper = new RepositoryMapper(rootPath, {
     maxFiles: options.maxFiles,
+    includePatterns: mergedInclude.length > 0 ? mergedInclude : undefined,
     excludePatterns: mergedExclude.length > 0 ? mergedExclude : undefined,
   });
 

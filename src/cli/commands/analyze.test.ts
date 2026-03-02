@@ -221,23 +221,30 @@ describe('analyze command', () => {
       readSpecGenConfig = vi.mocked(cfgMod.readSpecGenConfig);
     });
 
-    function makeConfig(excludePatterns: string[]) {
+    function makeConfig(excludePatterns: string[], includePatterns: string[] = []) {
       return {
         version: '1.0.0',
         projectType: 'nodejs' as const,
         openspecPath: './openspec',
-        analysis: { maxFiles: 500, includePatterns: [], excludePatterns },
+        analysis: { maxFiles: 500, includePatterns, excludePatterns },
         generation: { provider: 'openai' as const, model: 'gpt-4', domains: 'auto' as const },
         createdAt: new Date().toISOString(),
         lastRun: null,
       };
     }
 
-    function getMapperExcludePatterns(): string[] {
-      // Constructor second arg is options; check what excludePatterns was passed
+    function getMapperOptions(): { excludePatterns?: string[]; includePatterns?: string[] } {
       const calls = MockRepositoryMapper.mock.calls;
       expect(calls.length).toBeGreaterThan(0);
-      return (calls[calls.length - 1][1] as { excludePatterns?: string[] })?.excludePatterns ?? [];
+      return (calls[calls.length - 1][1] as { excludePatterns?: string[]; includePatterns?: string[] }) ?? {};
+    }
+
+    function getMapperExcludePatterns(): string[] {
+      return getMapperOptions().excludePatterns ?? [];
+    }
+
+    function getMapperIncludePatterns(): string[] {
+      return getMapperOptions().includePatterns ?? [];
     }
 
     it('passes config excludePatterns to RepositoryMapper when caller passes none', async () => {
@@ -285,6 +292,69 @@ describe('analyze command', () => {
       expect(getMapperExcludePatterns()).toEqual(
         expect.arrayContaining(['dist/**'])
       );
+    });
+  });
+
+  describe('runAnalysis — includePatterns from config', () => {
+    let MockRepositoryMapper: ReturnType<typeof vi.fn>;
+    let readSpecGenConfig: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      const mapperMod = await import('../../core/analyzer/repository-mapper.js');
+      MockRepositoryMapper = vi.mocked(mapperMod.RepositoryMapper);
+      MockRepositoryMapper.mockClear();
+      const cfgMod = await import('../../core/services/config-manager.js');
+      readSpecGenConfig = vi.mocked(cfgMod.readSpecGenConfig);
+    });
+
+    function makeConfig(includePatterns: string[], excludePatterns: string[] = []) {
+      return {
+        version: '1.0.0', projectType: 'nodejs' as const, openspecPath: './openspec',
+        analysis: { maxFiles: 500, includePatterns, excludePatterns },
+        generation: { provider: 'openai' as const, model: 'gpt-4', domains: 'auto' as const },
+        createdAt: new Date().toISOString(), lastRun: null,
+      };
+    }
+
+    function getMapperIncludePatterns(): string[] {
+      const calls = MockRepositoryMapper.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      return ((calls[calls.length - 1][1] as { includePatterns?: string[] })?.includePatterns) ?? [];
+    }
+
+    it('passes config includePatterns to RepositoryMapper when caller passes none', async () => {
+      readSpecGenConfig.mockResolvedValue(makeConfig(['*.graphql', '*.prisma']));
+
+      await runAnalysis('/fake/root', '/fake/root/.spec-gen/analysis', {
+        maxFiles: 500, include: [], exclude: [],
+      });
+
+      expect(getMapperIncludePatterns()).toEqual(
+        expect.arrayContaining(['*.graphql', '*.prisma'])
+      );
+    });
+
+    it('merges config includePatterns with caller-supplied include patterns', async () => {
+      readSpecGenConfig.mockResolvedValue(makeConfig(['*.graphql']));
+
+      await runAnalysis('/fake/root', '/fake/root/.spec-gen/analysis', {
+        maxFiles: 500, include: ['*.proto'], exclude: [],
+      });
+
+      expect(getMapperIncludePatterns()).toEqual(
+        expect.arrayContaining(['*.graphql', '*.proto'])
+      );
+    });
+
+    it('deduplicates include patterns present in both config and caller', async () => {
+      readSpecGenConfig.mockResolvedValue(makeConfig(['*.graphql']));
+
+      await runAnalysis('/fake/root', '/fake/root/.spec-gen/analysis', {
+        maxFiles: 500, include: ['*.graphql'], exclude: [],
+      });
+
+      const patterns = getMapperIncludePatterns();
+      expect(patterns.filter(p => p === '*.graphql')).toHaveLength(1);
     });
   });
 });

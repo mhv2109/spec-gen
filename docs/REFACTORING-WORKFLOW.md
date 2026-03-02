@@ -6,8 +6,9 @@ normalization.
 
 > **MCP shortcut** — If you use Cline or Claude Code, `spec-gen mcp` exposes
 > all analysis steps as tools the AI can call directly, without CLI commands or
-> `jq` pipes. See the [MCP section in the README](../README.md#mcp-server) for
-> setup. The MCP equivalents are noted inline throughout this guide.
+> `jq` pipes. See [CLINE-WORKFLOW.md](./CLINE-WORKFLOW.md) for a step-by-step
+> Cline setup and concrete conversation examples. The MCP equivalents are noted
+> inline throughout this guide.
 
 ---
 

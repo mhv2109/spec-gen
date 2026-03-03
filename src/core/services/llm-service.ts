@@ -157,6 +157,50 @@ function normalizeApiBase(url: string): string {
 }
 
 // ============================================================================
+// RETRY-AFTER PARSING
+// ============================================================================
+
+/**
+ * Parse the number of milliseconds to wait before retrying a 429 response.
+ *
+ * Checks (in order):
+ *  1. Standard `Retry-After` HTTP header (seconds as integer, or HTTP-date)
+ *  2. `Limit resets at: YYYY-MM-DD HH:MM:SS UTC` in the response body
+ *
+ * Returns `undefined` when nothing useful is found so the caller can fall back
+ * to its own exponential-backoff delay.
+ */
+export function parseRetryAfterMs(body: string, retryAfterHeader?: string | null): number | undefined {
+  const BUFFER_MS = 500; // small buffer to avoid hitting the wall again immediately
+
+  // 1. Retry-After header
+  if (retryAfterHeader) {
+    const seconds = Number(retryAfterHeader);
+    if (!isNaN(seconds) && seconds > 0) {
+      return Math.ceil(seconds * 1000) + BUFFER_MS;
+    }
+    // HTTP-date format
+    const headerDate = Date.parse(retryAfterHeader);
+    if (!isNaN(headerDate)) {
+      const ms = headerDate - Date.now();
+      if (ms > 0) return ms + BUFFER_MS;
+    }
+  }
+
+  // 2. "Limit resets at: YYYY-MM-DD HH:MM:SS UTC" in body
+  const match = body.match(/Limit resets at:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*UTC)/i);
+  if (match) {
+    const resetMs = Date.parse(match[1].replace(' UTC', 'Z').replace(' ', 'T'));
+    if (!isNaN(resetMs)) {
+      const ms = resetMs - Date.now();
+      if (ms > 0) return ms + BUFFER_MS;
+    }
+  }
+
+  return undefined;
+}
+
+// ============================================================================
 // PRICING (per 1M tokens)
 // ============================================================================
 
@@ -341,10 +385,13 @@ export class AnthropicProvider implements LLMProvider {
     };
   }
 
-  private parseError(error: string, status: number): Error & { status?: number; retryable?: boolean } {
-    const err = new Error(error) as Error & { status?: number; retryable?: boolean };
+  private parseError(error: string, status: number): Error & { status?: number; retryable?: boolean; retryAfterMs?: number } {
+    const err = new Error(error) as Error & { status?: number; retryable?: boolean; retryAfterMs?: number };
     err.status = status;
     err.retryable = status === 429 || status >= 500;
+    if (status === 429) {
+      err.retryAfterMs = parseRetryAfterMs(error);
+    }
     return err;
   }
 }
@@ -427,10 +474,13 @@ export class OpenAIProvider implements LLMProvider {
     };
   }
 
-  private parseError(error: string, status: number): Error & { status?: number; retryable?: boolean } {
-    const err = new Error(error) as Error & { status?: number; retryable?: boolean };
+  private parseError(error: string, status: number): Error & { status?: number; retryable?: boolean; retryAfterMs?: number } {
+    const err = new Error(error) as Error & { status?: number; retryable?: boolean; retryAfterMs?: number };
     err.status = status;
     err.retryable = status === 429 || status >= 500;
+    if (status === 429) {
+      err.retryAfterMs = parseRetryAfterMs(error);
+    }
     return err;
   }
 }
@@ -494,9 +544,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      const err = new Error(error) as Error & { status?: number; retryable?: boolean };
+      const err = new Error(error) as Error & { status?: number; retryable?: boolean; retryAfterMs?: number };
       err.status = response.status;
       err.retryable = response.status === 429 || response.status >= 500;
+      if (response.status === 429) {
+        err.retryAfterMs = parseRetryAfterMs(error, response.headers.get('retry-after'));
+      }
       throw err;
     }
 
@@ -569,9 +622,12 @@ export class GeminiProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      const err = new Error(error) as Error & { status?: number; retryable?: boolean };
+      const err = new Error(error) as Error & { status?: number; retryable?: boolean; retryAfterMs?: number };
       err.status = response.status;
       err.retryable = response.status === 429 || response.status >= 500;
+      if (response.status === 429) {
+        err.retryAfterMs = parseRetryAfterMs(error, response.headers.get('retry-after'));
+      }
       throw err;
     }
 
@@ -816,11 +872,17 @@ export class LLMService {
           throw lastError;
         }
 
-        logger.warning(`LLM request failed (attempt ${attempt + 1}), retrying in ${delay}ms: ${lastError.message}`);
-        await this.sleep(delay);
+        // Use the provider-supplied reset time if available, otherwise exponential backoff
+        const retryAfterMs = (errWithStatus as Error & { retryAfterMs?: number }).retryAfterMs;
+        const waitMs = retryAfterMs !== undefined ? retryAfterMs : delay;
 
-        // Exponential backoff
-        delay = Math.min(delay * 2, this.retryConfig.maxDelay);
+        logger.warning(`LLM request failed (attempt ${attempt + 1}), retrying in ${waitMs}ms: ${lastError.message}`);
+        await this.sleep(waitMs);
+
+        // Only advance the backoff delay when we didn't use a provider-supplied wait
+        if (retryAfterMs === undefined) {
+          delay = Math.min(delay * 2, this.retryConfig.maxDelay);
+        }
       }
     }
 

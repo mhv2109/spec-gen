@@ -386,6 +386,7 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
             s.highFanOut    > 0 ? `${s.highFanOut} god function`   : null,
             s.srpViolations > 0 ? `${s.srpViolations} SRP`        : null,
             s.cyclesDetected> 0 ? `${s.cyclesDetected} cycle`     : null,
+            s.inCloneGroup  > 0 ? `${s.inCloneGroup} duplicate`   : null,
           ].filter(Boolean).join('  ·  ');
 
           const issueLabel: Record<string, string> = {
@@ -394,6 +395,7 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
             high_fan_out:      `god   fanOut`,
             multi_requirement: 'SRP',
             in_cycle:          'cycle',
+            in_clone_group:    'clone',
           };
 
           console.log(`  Refactoring Candidates  (${s.withIssues}/${s.totalFunctions} functions):`);
@@ -431,6 +433,55 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
           console.log('');
         }
       } catch { /* refactor-priorities.json not yet generated */ }
+
+      // Duplicate code detection
+      try {
+        const { readFile: rf } = await import('node:fs/promises');
+        const dup = JSON.parse(await rf(join(opts.output, 'duplicates.json'), 'utf-8'));
+        if (dup?.stats?.cloneGroupCount > 0) {
+          const s = dup.stats;
+          const severity = s.duplicationRatio >= 0.2 ? '⚠'
+                           : s.duplicationRatio >= 0.1 ? 'ℹ'
+                           : ' ';
+          console.log(`  ${severity} Code Duplication  (${s.duplicatedFunctions}/${s.totalFunctions} functions):`);
+          console.log(`    ├─ Ratio: ${(s.duplicationRatio * 100).toFixed(1)}%`);
+          console.log(`    ├─ Clone groups: ${s.cloneGroupCount}`);
+          
+          // Show top clone types
+          const typeCounts: Record<string, number> = { exact: 0, structural: 0, near: 0 };
+          for (const group of dup.cloneGroups) {
+            typeCounts[group.type]++;
+          }
+          const typeLabels = Object.entries(typeCounts)
+            .filter(([_, count]) => count > 0)
+            .map(([type, count]) => `${count} ${type}`)
+            .join('  ·  ');
+          
+          console.log(`    └─ Types: ${typeLabels}`);
+          
+          // Show top 5 clone groups
+          if (dup.cloneGroups.length > 0) {
+            console.log('');
+            console.log('  Top 5 Clone Groups:');
+            const topGroups = dup.cloneGroups
+              .sort((a: any, b: any) => b.instances.length - a.instances.length)
+              .slice(0, 5);
+            
+            for (const group of topGroups) {
+              const files = group.instances.map((i: any) => {
+                const fileParts = i.file.split('/');
+                return `${fileParts[fileParts.length - 2]}/${fileParts[fileParts.length - 1]}:${i.functionName}`;
+              }).join('  ');
+              
+              console.log(`    ${group.type.padEnd(10)} (${group.instances.length}x, ${group.lineCount} lines): ${files}`);
+            }
+          }
+          
+          console.log('');
+          console.log(`    → ${opts.output}duplicates.json`);
+          console.log('');
+        }
+      } catch { /* duplicates.json not yet generated */ }
 
       // Detected domains
       if (artifacts.repoStructure.domains.length > 0) {

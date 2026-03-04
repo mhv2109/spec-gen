@@ -416,24 +416,25 @@ Each spec.md follows OpenSpec conventions:
       const openaiCompatKey = process.env.OPENAI_COMPAT_API_KEY;
       const geminiKey = process.env.GEMINI_API_KEY;
 
-      if (!anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
+      // Resolve provider early so we can skip the API key check for claude-code
+      const envDetectedProvider = anthropicKey ? 'anthropic'
+        : geminiKey ? 'gemini'
+        : openaiCompatKey ? 'openai-compat'
+        : 'openai';
+      const rootConfig = specGenConfig as unknown as Record<string, string>;
+      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'gemini' | 'claude-code' | 'mistral-vibe';
+
+      if (effectiveProvider !== 'claude-code' && effectiveProvider !== 'mistral-vibe' && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
         logger.error('No LLM API key found.');
         logger.discovery('Set one of the following environment variables:');
         logger.discovery('  ANTHROPIC_API_KEY    → https://console.anthropic.com/');
         logger.discovery('  OPENAI_API_KEY       → https://platform.openai.com/');
         logger.discovery('  GEMINI_API_KEY       → https://aistudio.google.com/');
         logger.discovery('  OPENAI_COMPAT_API_KEY + OPENAI_COMPAT_BASE_URL  → Mistral, Groq, Ollama...');
+        logger.discovery('  Or set provider to "claude-code" or "mistral-vibe" to use local CLI tools (no API key needed).');
         process.exitCode = 1;
         return;
       }
-
-      // Resolve provider with priority: config > env var auto-detection
-      const envDetectedProvider = anthropicKey ? 'anthropic'
-        : geminiKey ? 'gemini'
-        : openaiCompatKey ? 'openai-compat'
-        : 'openai';
-      const rootConfig = specGenConfig as unknown as Record<string, string>;
-      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'gemini';
 
       // Resolve model with priority: CLI flag > config > provider default
       const defaultModels: Record<string, string> = {
@@ -441,6 +442,8 @@ Each spec.md follows OpenSpec conventions:
         gemini: 'gemini-2.0-flash',
         'openai-compat': 'mistral-large-latest',
         openai: 'gpt-4o',
+        'claude-code': 'claude-code',
+        'mistral-vibe': 'mistral-vibe',
       };
       const effectiveModel = opts.model || specGenConfig.generation.model || defaultModels[effectiveProvider];
 

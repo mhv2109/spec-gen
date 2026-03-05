@@ -172,3 +172,5 @@ test-results/
 # --------------------
 .fastembed_cache/
 */.fastembed_cache/
+.kilocode/
+.vibe/

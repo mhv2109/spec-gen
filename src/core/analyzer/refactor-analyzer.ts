@@ -22,7 +22,7 @@
  */
 
 import type { SerializedCallGraph, FunctionNode } from './call-graph.js';
-import type { DuplicateDetectionResult, CloneGroup } from './duplicate-detector.js';
+import type { DuplicateDetectionResult } from './duplicate-detector.js';
 
 // ============================================================================
 // THRESHOLDS

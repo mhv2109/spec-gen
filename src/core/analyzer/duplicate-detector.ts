@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { CallGraphResult, FunctionNode } from './call-graph.js';
+import type { CallGraphResult } from './call-graph.js';
 
 // ============================================================================
 // TYPES

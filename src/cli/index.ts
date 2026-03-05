@@ -15,6 +15,7 @@ import { verifyCommand } from './commands/verify.js';
 import { driftCommand } from './commands/drift.js';
 import { runCommand } from './commands/run.js';
 import { mcpCommand } from './commands/mcp.js';
+import { viewCommand } from './commands/view.js';
 import { configureLogger } from '../utils/logger.js';
 
 const program = new Command();
@@ -86,5 +87,6 @@ program.addCommand(verifyCommand);
 program.addCommand(driftCommand);
 program.addCommand(runCommand);
 program.addCommand(mcpCommand);
+program.addCommand(viewCommand);
 
 program.parse();

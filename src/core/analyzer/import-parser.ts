@@ -649,28 +649,38 @@ export async function resolveImport(
   const fromDir = dirname(fromFile);
   const extensions = options.extensions ?? ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 
-  // Try resolving with different extensions
   const basePath = resolve(fromDir, importSource);
 
-  // Try exact path first
-  for (const ext of ['', ...extensions]) {
-    const tryPath = basePath + ext;
-    try {
-      await readFile(tryPath);
-      return tryPath;
-    } catch {
-      // File doesn't exist, try next
-    }
-  }
+  // Strip any existing extension from the import source.
+  // This handles the TypeScript NodeNext convention where imports are written
+  // as `./foo.js` but the actual file on disk is `./foo.ts`.
+  // Without this, we'd try `foo.js.ts`, `foo.js.tsx`, etc. and find nothing.
+  const existingExt = extname(basePath); // e.g. ".js", ".ts", ""
+  const baseWithoutExt = existingExt
+    ? basePath.slice(0, -existingExt.length)
+    : basePath;
 
-  // Try as directory with index file
-  for (const ext of extensions) {
-    const indexPath = join(basePath, `index${ext}`);
+  // Build candidate list (order matters: most specific first):
+  // 1. Exact path as-is (the import may already point to the real file)
+  // 2. Strip the extension, try every known extension (handles .js -> .ts)
+  // 3. Directory index files (handles `./components` -> `./components/index.ts`)
+  const candidates: string[] = [
+    basePath,
+    ...extensions.map(ext => baseWithoutExt + ext),
+    ...extensions.map(ext => join(basePath, `index${ext}`)),
+    ...extensions.map(ext => join(baseWithoutExt, `index${ext}`)),
+  ];
+
+  // Deduplicate while preserving order
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
     try {
-      await readFile(indexPath);
-      return indexPath;
+      await readFile(candidate);
+      return candidate;
     } catch {
-      // File doesn't exist, try next
+      // Not found, try next
     }
   }
 

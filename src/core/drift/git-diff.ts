@@ -148,10 +148,24 @@ export async function getCurrentBranch(rootPath: string): Promise<string> {
 }
 
 /**
+ * Validate a user-supplied git ref to prevent unexpected git argument injection.
+ * Allows branch/tag names, SHA hashes, relative refs (HEAD~1, @{upstream}), and
+ * the empty-tree SHA. Rejects refs containing shell metacharacters or null bytes.
+ */
+export function validateGitRef(ref: string): void {
+  if (ref === GIT_EMPTY_TREE_SHA || ref === 'auto') return;
+  // Allow: alphanumeric, -, _, ., /, ~, ^, @, {, }, :
+  if (!/^[\w\-./~^@{}:]+$/.test(ref)) {
+    throw new Error(`Invalid git ref: "${ref}". Refs must contain only alphanumeric characters and -_./ ~^@{}:`);
+  }
+}
+
+/**
  * Resolve a base ref, falling back through main → master → HEAD~1
  */
 export async function resolveBaseRef(rootPath: string, preferredRef: string): Promise<string> {
   if (preferredRef && preferredRef !== 'auto') {
+    validateGitRef(preferredRef);
     try {
       await execFileAsync('git', ['rev-parse', '--verify', preferredRef], { cwd: rootPath });
       return preferredRef;

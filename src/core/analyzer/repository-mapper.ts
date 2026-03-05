@@ -102,6 +102,8 @@ export interface RepositoryMap {
 export interface RepositoryMapperOptions {
   /** Maximum files to process */
   maxFiles?: number;
+  /** Patterns to force-include, overriding gitignore and excludePatterns */
+  includePatterns?: string[];
   /** Additional patterns to exclude */
   excludePatterns?: string[];
   /** Custom scoring configuration */
@@ -519,6 +521,7 @@ export class RepositoryMapper {
     this.rootPath = rootPath;
     this.options = {
       maxFiles: options.maxFiles ?? 500,
+      includePatterns: options.includePatterns ?? [],
       excludePatterns: options.excludePatterns ?? [],
       scoringConfig: options.scoringConfig ?? {},
       onProgress: options.onProgress ?? (() => {}),
@@ -739,6 +742,7 @@ export class RepositoryMapper {
     // Walk the directory
     const walkerOptions: FileWalkerOptions = {
       maxFiles: this.options.maxFiles,
+      includePatterns: this.options.includePatterns,
       excludePatterns: this.options.excludePatterns,
       onProgress: (progress) => {
         const pct = 10 + Math.round((progress.filesFound / (this.options.maxFiles ?? 500)) * 30);

@@ -12,6 +12,31 @@ import type { RepositoryMap } from './repository-mapper.js';
 import type { DependencyGraphResult } from './dependency-graph.js';
 import { toMermaidFormat } from './dependency-graph.js';
 
+/**
+ * Heuristic to detect test/spec files across languages.
+ * Excludes them from call graph analysis — test helpers inflate fanIn,
+ * and test functions are never "unreachable" by definition.
+ *
+ * Patterns covered:
+ *   TypeScript/JS: *.test.ts, *.spec.ts, *.test.tsx, __tests__/*, test_*.ts
+ *   Python:        test_*.py, *_test.py, tests/*.py
+ *   Go:            *_test.go
+ *   Rust:          files with #[cfg(test)] (not detectable here — excluded by directory pattern)
+ *   Java/Kotlin:   *Test.java, *Spec.kt
+ */
+export function isTestFile(filePath: string): boolean {
+  const name = filePath.replace(/\\/g, '/');
+  return (
+    /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(name) ||   // JS/TS: foo.test.ts
+    /(^|\/)__tests__\//.test(name) ||                          // JS/TS: __tests__/
+    /(^|\/)test_[^/]+\.(ts|js|py)$/.test(name) ||             // Python/TS: test_foo.py
+    /[^/]+_test\.(py|go)$/.test(name) ||                      // Python/Go: foo_test.py, foo_test.go
+    /(^|\/)tests?\/[^/]+\.(py|ts|js|rb|php)$/.test(name) ||  // tests/ directory
+    /[A-Z][a-zA-Z0-9]*Test\.(java|kt|scala)$/.test(name) ||  // Java: FooTest.java
+    /[A-Z][a-zA-Z0-9]*Spec\.(kt|scala|rb)$/.test(name)       // Kotlin/Ruby: FooSpec.kt
+  );
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -115,6 +140,10 @@ export interface LLMContext {
   phase1_survey: LLMContextPhase;
   phase2_deep: LLMContextPhase;
   phase3_validation: LLMContextPhase;
+  /** Compact signatures for ALL analyzed files — used by Stage 1 instead of bare file paths */
+  signatures?: import('./signature-extractor.js').FileSignatureMap[];
+  /** Static call graph: function→function relationships across all TS/Python files */
+  callGraph?: import('./call-graph.js').SerializedCallGraph;
 }
 
 /**
@@ -808,9 +837,11 @@ export class AnalysisArtifactGenerator {
       estimatedTokens: 2000,
     };
 
-    // Phase 2: Deep analysis (top files by importance)
+    // Phase 2: Deep analysis (top files by importance, excluding test files)
     const phase2Files: LLMContextPhase['files'] = [];
-    const topFiles = repoMap.highValueFiles.slice(0, this.options.maxDeepAnalysisFiles);
+    const topFiles = repoMap.highValueFiles
+      .filter(f => !isTestFile(f.path))
+      .slice(0, this.options.maxDeepAnalysisFiles);
 
     for (const file of topFiles) {
       try {
@@ -832,12 +863,13 @@ export class AnalysisArtifactGenerator {
       totalTokens: phase2Files.reduce((sum, f) => sum + f.tokens, 0),
     };
 
-    // Phase 3: Validation (random leaf nodes not in phase 2)
+    // Phase 3: Validation (random leaf nodes not in phase 2, excluding test files)
     const phase2Paths = new Set(phase2Files.map(f => f.path));
     const leafFiles = depGraph.rankings.leafNodes
       .map(id => depGraph.nodes.find(n => n.id === id)?.file)
       .filter((f): f is ScoredFile => f !== undefined)
-      .filter(f => !phase2Paths.has(f.path));
+      .filter(f => !phase2Paths.has(f.path))
+      .filter(f => !isTestFile(f.path));
 
     // Shuffle and take random samples
     const shuffled = leafFiles.sort(() => Math.random() - 0.5);
@@ -864,10 +896,73 @@ export class AnalysisArtifactGenerator {
       totalTokens: phase3Files.reduce((sum, f) => sum + f.tokens, 0),
     };
 
+    // Signature extraction + call graph for ALL analyzed files
+    // Read each file once and reuse the content for both operations.
+    const { extractSignatures } = await import('./signature-extractor.js');
+    const { CallGraphBuilder, serializeCallGraph } = await import('./call-graph.js');
+    const { detectLanguage } = await import('./signature-extractor.js');
+
+    const signatures: import('./signature-extractor.js').FileSignatureMap[] = [];
+    const callGraphFiles: Array<{ path: string; content: string; language: string }> = [];
+
+    for (const file of repoMap.allFiles) {
+      try {
+        const content = await readFile(file.absolutePath, 'utf-8');
+        const isTest = isTestFile(file.path);
+
+        // Signatures: exclude test files — they pollute the context shown to Stage 1
+        // and cause the LLM to suggest test files as schema/service/api candidates.
+        if (!isTest) {
+          const map = extractSignatures(file.path, content);
+          if (map.entries.length > 0) {
+            signatures.push(map);
+          }
+        }
+
+        // Call graph — all languages supported by tree-sitter extractors, exclude test files
+        const lang = detectLanguage(file.path);
+        const CALL_GRAPH_LANGS = new Set(['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Ruby', 'Java']);
+        if (!isTest && CALL_GRAPH_LANGS.has(lang)) {
+          callGraphFiles.push({ path: file.path, content, language: lang });
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
+    // Build call graph from collected files
+    const builder = new CallGraphBuilder();
+    const callGraphResult = await builder.build(callGraphFiles);
+    const callGraph = serializeCallGraph(callGraphResult);
+
+    // Refactoring priorities (structural — no requirements yet, enriched after generate)
+    const { analyzeForRefactoring } = await import('./refactor-analyzer.js');
+    let mappings: import('./refactor-analyzer.js').MappingEntry[] | undefined;
+    try {
+      const mappingRaw = await readFile(join(this.options.outputDir, 'mapping.json'), 'utf-8');
+      const mappingJson = JSON.parse(mappingRaw);
+      mappings = mappingJson.mappings as import('./refactor-analyzer.js').MappingEntry[];
+    } catch {
+      // mapping.json not yet available (first analyze before generate) — that's fine
+    }
+    const refactorReport = analyzeForRefactoring(callGraph, mappings);
+
+    // Save refactor priorities immediately (not part of llm-context.json — too verbose for LLM)
+    try {
+      await writeFile(
+        join(this.options.outputDir, 'refactor-priorities.json'),
+        JSON.stringify(refactorReport, null, 2)
+      );
+    } catch {
+      // non-fatal if output dir doesn't exist yet
+    }
+
     return {
       phase1_survey: phase1,
       phase2_deep: phase2,
       phase3_validation: phase3,
+      signatures,
+      callGraph,
     };
   }
 }

@@ -426,4 +426,28 @@ describe('FileWalker', () => {
       expect(result.summary.skippedCount).toBeGreaterThan(0);
     });
   });
+
+  describe('large file size guard', () => {
+    it('returns lines=-1 for files larger than 10 MB', async () => {
+      // Create a file just above the 10 MB threshold by writing 10 MB + 1 byte
+      const largePath = join(testDir, 'large.ts');
+      const chunk = Buffer.alloc(1024 * 1024, 'x'); // 1 MB
+      const handle = await import('node:fs/promises').then(m => m.open(largePath, 'w'));
+      for (let i = 0; i < 11; i++) await handle.write(chunk);
+      await handle.close();
+
+      const result = await walkDirectory(testDir);
+      const largeMeta = result.files.find(f => f.path === 'large.ts');
+      expect(largeMeta).toBeDefined();
+      expect(largeMeta!.lines).toBe(-1);
+    });
+
+    it('returns a positive line count for normal-sized files', async () => {
+      await writeFile(join(testDir, 'small.ts'), 'const a = 1;\nconst b = 2;\n');
+      const result = await walkDirectory(testDir);
+      const meta = result.files.find(f => f.path === 'small.ts');
+      expect(meta).toBeDefined();
+      expect(meta!.lines).toBeGreaterThan(0);
+    });
+  });
 });

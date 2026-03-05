@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { classifyFile, isSkippableFile } from './git-diff.js';
+import { classifyFile, isSkippableFile, validateGitRef } from './git-diff.js';
 
 // ============================================================================
 // FILE CLASSIFICATION TESTS
@@ -165,5 +165,61 @@ describe('isSkippableFile', () => {
     expect(isSkippableFile('src/index.ts')).toBe(false);
     expect(isSkippableFile('src/main.py')).toBe(false);
     expect(isSkippableFile('README.md')).toBe(false);
+  });
+});
+
+// ============================================================================
+// validateGitRef
+// ============================================================================
+
+describe('validateGitRef', () => {
+  it('accepts simple branch names', () => {
+    expect(() => validateGitRef('main')).not.toThrow();
+    expect(() => validateGitRef('feature/my-branch')).not.toThrow();
+    expect(() => validateGitRef('release-1.0')).not.toThrow();
+  });
+
+  it('accepts SHA hashes', () => {
+    expect(() => validateGitRef('abc1234def5678')).not.toThrow();
+    expect(() => validateGitRef('4b825dc642cb6eb9a060e54bf899d15f71049056')).not.toThrow();
+  });
+
+  it('accepts relative refs', () => {
+    expect(() => validateGitRef('HEAD~1')).not.toThrow();
+    expect(() => validateGitRef('HEAD^')).not.toThrow();
+    expect(() => validateGitRef('@{upstream}')).not.toThrow();
+  });
+
+  it('accepts "auto" without validation', () => {
+    expect(() => validateGitRef('auto')).not.toThrow();
+  });
+
+  it('accepts the empty-tree SHA', () => {
+    expect(() => validateGitRef('4b825dc642cb6eb9a060e54bf899d15f71049056')).not.toThrow();
+  });
+
+  it('rejects refs with semicolons', () => {
+    expect(() => validateGitRef('main; rm -rf /')).toThrow('Invalid git ref');
+  });
+
+  it('rejects refs with spaces', () => {
+    expect(() => validateGitRef('main branch')).toThrow('Invalid git ref');
+  });
+
+  it('rejects refs with backticks', () => {
+    expect(() => validateGitRef('`whoami`')).toThrow('Invalid git ref');
+  });
+
+  it('rejects refs with dollar signs', () => {
+    expect(() => validateGitRef('$HOME')).toThrow('Invalid git ref');
+  });
+
+  it('rejects refs with newlines', () => {
+    expect(() => validateGitRef('main\necho')).toThrow('Invalid git ref');
+  });
+
+  it('rejects empty string', () => {
+    // empty string doesn't match \w+ so it should throw
+    expect(() => validateGitRef('')).toThrow('Invalid git ref');
   });
 });

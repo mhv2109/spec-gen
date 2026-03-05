@@ -204,11 +204,16 @@ const TEST_FILE_PATTERNS = [
   /^spec_.*\.[^.]+$/,
 ];
 
+/** Maximum file size to read for line counting / shebang detection (10 MB). */
+const MAX_READ_SIZE = 10_000_000;
+
 /**
  * Check if a file has a shebang line
  */
 async function hasShebang(filePath: string): Promise<boolean> {
   try {
+    const s = await stat(filePath);
+    if (s.size > MAX_READ_SIZE) return false;
     const content = await readFile(filePath, { encoding: 'utf-8', flag: 'r' });
     return content.startsWith('#!');
   } catch {
@@ -217,10 +222,12 @@ async function hasShebang(filePath: string): Promise<boolean> {
 }
 
 /**
- * Count lines in a file
+ * Count lines in a file. Returns -1 for files larger than MAX_READ_SIZE.
  */
 async function countLines(filePath: string): Promise<number> {
   try {
+    const s = await stat(filePath);
+    if (s.size > MAX_READ_SIZE) return -1;
     const content = await readFile(filePath, 'utf-8');
     return content.split('\n').length;
   } catch {
@@ -355,6 +362,8 @@ export class FileWalker {
   private rootPath: string;
   private options: Required<FileWalkerOptions>;
   private ig: Ignore | null = null;
+  /** Separate ignore instance used to check if a file matches includePatterns. */
+  private igInclude: Ignore | null = null;
   private files: FileMetadata[] = [];
   private skippedCount = 0;
   private skippedReasons: Record<string, number> = {};
@@ -413,12 +422,17 @@ export class FileWalker {
    * Check if we should skip a file
    */
   private shouldSkipFile(relativePath: string, _fileName: string): boolean {
-    // Check against ignore patterns
+    // includePatterns override all exclusions — check first
+    if (this.igInclude && this.igInclude.ignores(relativePath)) {
+      return false;
+    }
+
+    // Check against ignore patterns (gitignore + excludePatterns)
     if (this.ig && this.ig.ignores(relativePath)) {
       return true;
     }
 
-    // Check exclude patterns against relative path
+    // Check exclude patterns against relative path (direct prefix match)
     for (const pattern of this.options.excludePatterns) {
       const normalized = pattern.replace(/\/\*\*$/, '').replace(/\/$/, '');
       if (relativePath === normalized || relativePath.startsWith(normalized + '/')) {
@@ -567,6 +581,17 @@ export class FileWalker {
     // Add user-specified exclude patterns
     for (const pattern of this.options.excludePatterns) {
       this.ig.add(pattern);
+    }
+
+    // includePatterns override gitignore/excludePatterns at file level.
+    // Add them as negated patterns so this.ig lets them through, and
+    // build a separate igInclude instance for the direct excludePatterns check.
+    if (this.options.includePatterns.length > 0) {
+      this.igInclude = ignore();
+      for (const pattern of this.options.includePatterns) {
+        this.ig.add('!' + pattern);
+        this.igInclude.add(pattern);
+      }
     }
 
     // Start walking from root

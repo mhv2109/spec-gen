@@ -290,39 +290,104 @@ spec-gen drift --no-color                # Plain output for CI logs
 | **Reproducibility** | Identical every run | May vary |
 | **Best for** | CI, pre-commit hooks, quick checks | Initial generation, reducing false positives |
 
-## Custom LLM Endpoints
+## LLM Providers
 
-spec-gen works with any OpenAI-compatible API endpoint. Configuration is available through three methods, in priority order:
+spec-gen supports four providers. The default is Anthropic Claude.
 
-**1. CLI flags** (per-invocation):
-```bash
-spec-gen generate --api-base http://localhost:8000/v1
-spec-gen generate --api-base http://localhost:8000/v1 --insecure
+| Provider | `provider` value | API key env var | Default model |
+|----------|-----------------|-----------------|---------------|
+| Anthropic Claude | `anthropic` *(default)* | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| OpenAI-compatible *(Mistral, Groq, Ollama…)* | `openai-compat` | `OPENAI_COMPAT_API_KEY` | `mistral-large-latest` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+
+### Selecting a provider
+
+Set `provider` (and optionally `model`) in the `generation` block of `.spec-gen/config.json`:
+
+```json
+{
+  "generation": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "domains": "auto"
+  }
+}
 ```
 
-**2. Environment variables** (per-session):
+Override the model for a single run:
 ```bash
-export OPENAI_API_BASE=http://localhost:8000/v1
-export OPENAI_API_KEY=dummy-key
-
-# Or for Anthropic-compatible endpoints
-export ANTHROPIC_API_BASE=https://internal-proxy.corp.net/v1
-export ANTHROPIC_API_KEY=sk-ant-...
+spec-gen generate --model claude-opus-4-20250514
 ```
 
-**3. Config file** (per-project):
+### OpenAI-compatible servers (Ollama, Mistral, Groq, LM Studio, vLLM…)
+
+Use `provider: "openai-compat"` with a base URL and API key:
+
+**Environment variables:**
+```bash
+export OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1   # Ollama, LM Studio, local servers
+export OPENAI_COMPAT_API_KEY=ollama                       # any non-empty value for local servers
+                                                          # use your real API key for cloud providers (Mistral, Groq…)
+```
+
+**Config file** (per-project):
+```json
+{
+  "generation": {
+    "provider": "openai-compat",
+    "model": "llama3.2",
+    "openaiCompatBaseUrl": "http://localhost:11434/v1",
+    "domains": "auto"
+  }
+}
+```
+
+**Self-signed certificates** (internal servers, VPN endpoints):
+```bash
+spec-gen generate --insecure
+```
+Or in `config.json`:
+```json
+{
+  "generation": {
+    "provider": "openai-compat",
+    "openaiCompatBaseUrl": "https://internal-llm.corp.net/v1",
+    "skipSslVerify": true,
+    "domains": "auto"
+  }
+}
+```
+
+Works with: Ollama, LM Studio, Mistral AI, Groq, Together AI, LiteLLM, vLLM,
+text-generation-inference, LocalAI, Azure OpenAI, and any `/v1/chat/completions` server.
+
+### Custom base URL for Anthropic or OpenAI
+
+To redirect the built-in Anthropic or OpenAI provider to a proxy or self-hosted endpoint:
+
+```bash
+# CLI (one-off)
+spec-gen generate --api-base https://my-proxy.corp.net/v1
+
+# Environment variable
+export ANTHROPIC_API_BASE=https://my-proxy.corp.net/v1
+export OPENAI_API_BASE=https://my-proxy.corp.net/v1
+```
+
+Or in `config.json` under the `llm` block:
 ```json
 {
   "llm": {
-    "apiBase": "http://localhost:8000/v1",
+    "apiBase": "https://my-proxy.corp.net/v1",
     "sslVerify": false
   }
 }
 ```
 
-Priority: CLI flags > environment variables > config file > provider defaults.
+`sslVerify: false` disables TLS certificate validation — use only for internal servers with self-signed certificates.
 
-Compatible with vLLM, Ollama, LiteLLM, Azure OpenAI, text-generation-inference, LocalAI, and any OpenAI-compatible server.
+Priority: CLI flags > environment variables > config file > provider defaults.
 
 ## Commands
 
@@ -336,16 +401,22 @@ Compatible with vLLM, Ollama, LiteLLM, Azure OpenAI, text-generation-inference, 
 | `spec-gen drift` | Detect spec drift (static) | No |
 | `spec-gen drift --use-llm` | Detect spec drift (LLM-enhanced) | Yes |
 | `spec-gen run` | Full pipeline: init, analyze, generate | Yes |
+| `spec-gen mcp` | Start MCP server (stdio, for Cline / Claude Code) | No |
 
 ### Global Options
 
 ```bash
---api-base <url>       # Custom LLM API base URL
+--api-base <url>       # Custom LLM API base URL (proxy / self-hosted)
 --insecure             # Disable SSL certificate verification
 --config <path>        # Config file path (default: .spec-gen/config.json)
 -q, --quiet            # Errors only
 -v, --verbose          # Debug output
 --no-color             # Plain text output (enables timestamps)
+```
+
+Generate-specific options:
+```bash
+--model <name>         # Override LLM model (e.g. gpt-4o-mini, llama3.2)
 ```
 
 ### Drift Options
@@ -397,6 +468,155 @@ spec-gen verify [options]
   --json                 # JSON output
 ```
 
+## MCP Server
+
+`spec-gen mcp` starts spec-gen as a [Model Context Protocol](https://modelcontextprotocol.io/) server over stdio, exposing static analysis as tools that any MCP-compatible AI agent (Cline, Roo Code, Kilocode, Claude Code, Cursor…) can call directly — no API key required.
+
+### Setup
+
+**Claude Code** — add a `.mcp.json` at your project root (the repo ships one):
+
+```json
+{
+  "mcpServers": {
+    "spec-gen": {
+      "command": "node",
+      "args": ["/absolute/path/to/spec-gen/dist/cli/index.js", "mcp"]
+    }
+  }
+}
+```
+
+**Cline / Roo Code / Kilocode** — add the same block under `mcpServers` in the MCP settings JSON of your editor.
+
+### Quick Start
+
+**1. Build spec-gen**
+
+```bash
+git clone https://github.com/clay-good/spec-gen
+cd spec-gen && npm install && npm run build
+```
+
+**2. Generate specs once** (required for drift detection and naming alignment)
+
+```bash
+cd /path/to/your-project
+spec-gen init      # detect project type, create config
+spec-gen generate  # generate OpenSpec specs (requires LLM API key)
+```
+
+**3. Connect your editor**
+
+#### Claude Code
+
+The repo ships a `.mcp.json` — edit the path and you are done:
+
+```json
+{
+  "mcpServers": {
+    "spec-gen": {
+      "command": "node",
+      "args": ["/absolute/path/to/spec-gen/dist/cli/index.js", "mcp"]
+    }
+  }
+}
+```
+
+The MCP tools (`analyze_codebase`, `check_spec_drift`, `get_refactor_report`, …) are then available directly in any Claude Code conversation — just ask naturally: *"analyse my codebase"*, *"check spec drift"*, *"help me refactor X"*.
+
+#### Cline / Roo Code / Kilocode
+
+Add the same `mcpServers` block in the editor's MCP settings JSON, then install the pre-built slash command workflows:
+
+```bash
+cd /path/to/your-project
+mkdir -p .clinerules/workflows
+cp /path/to/spec-gen/examples/cline-workflows/*.md .clinerules/workflows/
+```
+
+Type one of the following commands in a conversation:
+
+| Command | Needs API key | What it does |
+|---------|:---:|-------------|
+| `/spec-gen-analyze-codebase` | No | Architecture overview, call graph highlights, top refactor issues |
+| `/spec-gen-check-spec-drift` | No | Detect code changes not reflected in specs; per-kind remediation guidance |
+| `/spec-gen-refactor-codebase` | No | Full guided refactoring loop with impact analysis, coverage gate, and verification |
+
+`analyze_codebase`, `check_spec_drift`, and all refactoring tools run on **pure static analysis** — no LLM quota consumed. Only `spec-gen generate` (the one-time spec generation step) requires an API key.
+
+### Cline Slash Commands
+
+`examples/cline-workflows/` contains three executable workflow files. Copy them to your project's `.clinerules/workflows/` to activate them as slash commands:
+
+```bash
+mkdir -p .clinerules/workflows
+cp /path/to/spec-gen/examples/cline-workflows/*.md .clinerules/workflows/
+```
+
+| Command | What it does |
+|---------|-------------|
+| `/spec-gen-analyze-codebase` | Runs `analyze_codebase`, summarises the results (project type, file count, top 3 refactor issues, detected domains), shows the call graph highlights, and suggests next steps. |
+| `/spec-gen-check-spec-drift` | Runs `check_spec_drift`, presents issues by severity (gap / stale / uncovered / orphaned-spec), shows per-kind remediation commands, and optionally drills into affected file signatures. |
+| `/spec-gen-refactor-codebase` | Full refactoring loop: static analysis → prioritized report with coverage gate → impact assessment → Mermaid subgraph → low-risk entry points → proposed changes → verification. Optional final step covers dead-code detection and naming alignment (requires `spec-gen generate`). |
+
+All three commands ask which directory to use, call the MCP tools directly, and guide you through the results without leaving the editor. They work in Cline, Roo Code, Kilocode, and any editor that supports the `.clinerules/workflows/` convention.
+
+### Tools
+
+| Tool | Description | Requires prior analysis |
+|------|-------------|------------------------|
+| `analyze_codebase` | Run full static analysis; returns project metadata, call graph stats, and top-10 refactor priorities. Results cached for 1 hour (bypass with `force: true`). | No |
+| `get_refactor_report` | Prioritized list of functions to refactor: unreachable code, hub overload (high fan-in), god functions (high fan-out), SRP violations, cyclic deps. | Yes |
+| `get_call_graph` | Hub functions, entry points, and architectural layer violations for the project. | Yes |
+| `get_signatures` | Compact function/class signatures per file. Filter by path substring with `filePattern`. | Yes |
+| `get_subgraph` | Depth-limited subgraph centred on a function name. Direction: `downstream` (what it calls), `upstream` (who calls it), or `both`. Output as JSON or Mermaid diagram. | Yes |
+| `get_mapping` | Requirement→function mapping from `spec-gen generate`. Shows which functions implement which spec requirements, confidence level, and orphan functions with no spec coverage. | Yes (generate) |
+
+### Parameters
+
+**`analyze_codebase`**
+```
+directory  string   Absolute path to the project directory
+force      boolean  Force re-analysis even if cache is fresh (default: false)
+```
+
+**`get_refactor_report`**, **`get_call_graph`**
+```
+directory  string   Absolute path to the project directory
+```
+
+**`get_signatures`**
+```
+directory    string   Absolute path to the project directory
+filePattern  string   Optional path substring filter (e.g. "services", ".py")
+```
+
+**`get_subgraph`**
+```
+directory     string   Absolute path to the project directory
+functionName  string   Function name to centre on (case-insensitive partial match)
+direction     string   "downstream" | "upstream" | "both"  (default: "downstream")
+maxDepth      number   BFS traversal depth limit  (default: 3)
+format        string   "json" | "mermaid"  (default: "json")
+```
+
+**`get_mapping`**
+```
+directory    string    Absolute path to the project directory
+domain       string    Optional domain filter (e.g. "auth", "crawler")
+orphansOnly  boolean   Return only orphan functions (default: false)
+```
+
+### Typical workflow
+
+```
+1. analyze_codebase({ directory: "/path/to/project" })
+2. get_refactor_report({ directory: "/path/to/project" })
+3. get_subgraph({ directory: "...", functionName: "run", direction: "downstream", format: "mermaid" })
+4. get_mapping({ directory: "...", orphansOnly: true })   # dead code candidates
+```
+
 ## Output
 
 spec-gen writes to the OpenSpec directory structure:
@@ -428,6 +648,7 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 | `llm-context.json` | Context prepared for LLM |
 | `dependencies.mermaid` | Visual dependency graph |
 | `SUMMARY.md` | Human-readable analysis summary |
+| `mapping.json` | Requirement→function mapping (produced by `generate`) |
 
 ## Configuration
 
@@ -450,46 +671,42 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 }
 ```
 
-Add an optional `llm` block for custom endpoints:
-
-```json
-{
-  "llm": {
-    "apiBase": "http://localhost:8000/v1",
-    "sslVerify": false
-  }
-}
-```
-
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (used by default) |
-| `OPENAI_API_KEY` | OpenAI API key (fallback) |
-| `ANTHROPIC_API_BASE` | Custom Anthropic-compatible endpoint |
-| `OPENAI_API_BASE` | Custom OpenAI-compatible endpoint |
-| `DEBUG` | Enable stack traces on errors |
-| `CI` | Auto-detected; enables timestamps in output |
+| Variable | Provider | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | `anthropic` | Anthropic API key |
+| `ANTHROPIC_API_BASE` | `anthropic` | Custom base URL (proxy / self-hosted) |
+| `OPENAI_API_KEY` | `openai` | OpenAI API key |
+| `OPENAI_API_BASE` | `openai` | Custom base URL (Azure, proxy…) |
+| `OPENAI_COMPAT_API_KEY` | `openai-compat` | API key for OpenAI-compatible server |
+| `OPENAI_COMPAT_BASE_URL` | `openai-compat` | Base URL, e.g. `https://api.mistral.ai/v1` |
+| `GEMINI_API_KEY` | `gemini` | Google Gemini API key |
+| `DEBUG` | — | Enable stack traces on errors |
+| `CI` | — | Auto-detected; enables timestamps in output |
 
 ## Requirements
 
 - Node.js 20+
-- API key for `generate`, `verify`, and `drift --use-llm`:
+- API key for `generate`, `verify`, and `drift --use-llm` — set the env var for your chosen provider:
   ```bash
-  export ANTHROPIC_API_KEY=sk-ant-...
-  # or
-  export OPENAI_API_KEY=sk-...
+  export ANTHROPIC_API_KEY=sk-ant-...       # Anthropic (default)
+  export OPENAI_API_KEY=sk-...              # OpenAI
+  export OPENAI_COMPAT_API_KEY=ollama       # OpenAI-compatible local server
+  export GEMINI_API_KEY=...                 # Google Gemini
   ```
 - `analyze`, `drift`, and `init` require no API key
 
 ## Supported Languages
 
-| Language | Support Level |
-|----------|---------------|
-| JavaScript/TypeScript | Full |
-| Python | Basic |
-| Go | Basic |
+| Language | Signatures | Call Graph |
+|----------|-----------|------------|
+| TypeScript / JavaScript | Full | Full |
+| Python | Full | Full |
+| Go | Full | Full |
+| Rust | Full | Full |
+| Ruby | Full | Full |
+| Java | Full | Full |
 
 TypeScript projects get the best results due to richer type information.
 
@@ -573,11 +790,11 @@ All functions accept an optional `onProgress` callback for status updates and th
 npm install          # Install dependencies
 npm run dev          # Development mode (watch)
 npm run build        # Build
-npm run test:run     # Run tests (935 unit tests)
+npm run test:run     # Run tests (1052 unit tests)
 npm run typecheck    # Type check
 ```
 
-935 unit tests covering static analysis, spec mapping, drift detection, LLM enhancement, ADR generation, the programmatic API, and the full CLI.
+1052 unit tests covering static analysis, call graph, refactor analysis, spec mapping, drift detection, LLM enhancement, ADR generation, and the full CLI.
 
 ## Links
 

@@ -12,6 +12,7 @@ import { logger } from '../../utils/logger.js';
 import type { AnalyzeOptions } from '../../types/index.js';
 import { readSpecGenConfig } from '../../core/services/config-manager.js';
 import { RepositoryMapper, type RepositoryMap } from '../../core/analyzer/repository-mapper.js';
+import type { CloneGroup, CloneInstance } from '../../core/analyzer/duplicate-detector.js';
 import {
   DependencyGraphBuilder,
   type DependencyGraphResult,
@@ -468,11 +469,11 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
             console.log('');
             console.log('  Top 5 Clone Groups:');
             const topGroups = dup.cloneGroups
-              .sort((a: any, b: any) => b.instances.length - a.instances.length)
+              .sort((a: CloneGroup, b: CloneGroup) => b.instances.length - a.instances.length)
               .slice(0, 5);
             
             for (const group of topGroups) {
-              const files = group.instances.map((i: any) => {
+              const files = group.instances.map((i: CloneInstance) => {
                 const fileParts = i.file.split('/');
                 return `${fileParts[fileParts.length - 2]}/${fileParts[fileParts.length - 1]}:${i.functionName}`;
               }).join('  ');

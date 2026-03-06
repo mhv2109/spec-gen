@@ -74,7 +74,7 @@ beforeEach(() => {
   mockCreateOpenSpecStructure.mockResolvedValue(undefined);
   mockGitignoreExists.mockResolvedValue(false);
   mockIsInGitignore.mockResolvedValue(false);
-  mockAddToGitignore.mockResolvedValue(undefined);
+  mockAddToGitignore.mockResolvedValue(true);
 });
 
 // ============================================================================

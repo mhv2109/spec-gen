@@ -11,7 +11,8 @@ import { readSpecGenConfig } from '../core/services/config-manager.js';
 import { RepositoryMapper } from '../core/analyzer/repository-mapper.js';
 import { DependencyGraphBuilder } from '../core/analyzer/dependency-graph.js';
 import { AnalysisArtifactGenerator } from '../core/analyzer/artifact-generator.js';
-import type { AnalyzeApiOptions, AnalyzeResult, ProgressCallback } from './types.js';
+import type { AnalyzeApiOptions, AnalyzeResult, ProgressCallback, RepositoryMap } from './types.js';
+import type { DependencyGraphResult } from '../core/analyzer/dependency-graph.js';
 
 function progress(onProgress: ProgressCallback | undefined, step: string, status: 'start' | 'progress' | 'complete' | 'skip', detail?: string): void {
   onProgress?.({ phase: 'analyze', step, status, detail });
@@ -62,13 +63,13 @@ export async function specGenAnalyze(options: AnalyzeApiOptions = {}): Promise<A
         // Load and return existing analysis
         const { readFile } = await import('node:fs/promises');
         const repoStructureContent = await readFile(repoStructurePath, 'utf-8');
-        const repoStructure = JSON.parse(repoStructureContent);
+        const repoStructure = JSON.parse(repoStructureContent) as RepositoryMap;
 
         const depGraphPath = join(outputPath, 'dependency-graph.json');
-        let depGraph;
+        let depGraph: DependencyGraphResult | undefined;
         if (await fileExists(depGraphPath)) {
           const depGraphContent = await readFile(depGraphPath, 'utf-8');
-          depGraph = JSON.parse(depGraphContent);
+          depGraph = JSON.parse(depGraphContent) as DependencyGraphResult;
         }
 
         return {

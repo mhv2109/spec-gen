@@ -139,6 +139,23 @@ Cross-reference with the subgraph from Step 5: a good first extraction candidate
 
 ---
 
+## Step 6b — Find insertion points for extracted helpers
+
+Before designing the change sequence, identify where extracted functions should land.
+This avoids creating helpers in the wrong file or layer.
+
+```xml
+<use_mcp_tool>
+  <server_name>spec-gen</server_name>
+  <tool_name>suggest_insertion_points</tool_name>
+  <arguments>{"directory": "$DIRECTORY", "query": "extract helper from $FUNCTION_NAME", "limit": 5}</arguments>
+</use_mcp_tool>
+```
+
+For each candidate, note its role and strategy. Prefer candidates that already call into — or are called by — the target function (visible in the Step 5 subgraph).
+
+---
+
 ## Step 7 — Design the change sequence
 
 Design an ordered sequence of atomic changes based on the strategy from Step 4. Each change must specify:

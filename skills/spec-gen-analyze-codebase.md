@@ -36,9 +36,27 @@ Options: current workspace root | enter a different path
 
 ---
 
-## Step 3 — Summarize the results
+## Step 3 — Get the architecture overview
+
+```xml
+<use_mcp_tool>
+  <server_name>spec-gen</server_name>
+  <tool_name>get_architecture_overview</tool_name>
+  <arguments>{"directory": "$DIRECTORY"}</arguments>
+</use_mcp_tool>
+```
 
 Present a concise summary:
+- Total files, clusters, edges, cycles, and layer violations
+- Top 3 clusters by file count: role (entry_layer / orchestrator / hub_heavy / internal) and dependsOn
+- Global entry points — the public-facing roots of the codebase
+- Critical hub functions (high fan-in — touch with care)
+
+---
+
+## Step 4 — Summarize the refactor report
+
+Present a concise summary from the `analyze_codebase` result:
 - Project type and detected frameworks
 - File count, function count, internal call count
 - Top 5 refactoring issues (function name, file, issue type, priority score)
@@ -46,7 +64,7 @@ Present a concise summary:
 
 ---
 
-## Step 4 — Show the call graph
+## Step 5 — Show the call graph
 
 ```xml
 <use_mcp_tool>
@@ -62,7 +80,7 @@ Highlight:
 
 ---
 
-## Step 5 — Show duplicate code report
+## Step 6 — Show duplicate code report
 
 ```xml
 <use_mcp_tool>
@@ -81,14 +99,16 @@ Present a concise summary:
 
 ---
 
-## Step 6 — Suggest next steps
+## Step 7 — Suggest next steps
 
 Based on the analysis, guide the user through the natural next actions in order:
 
 1. Call `get_signatures` on the modules containing the top issues to understand their public API
 2. Call `get_subgraph` on the highest-priority function to map its callers and callees
-3. If significant duplication was found, suggest consolidating clone groups **before** refactoring
-4. Suggest running `/spec-gen-plan-refactor` once the user has enough context to act, then `/spec-gen-execute-refactor` to apply the plan
+3. Call `suggest_insertion_points` with a brief feature description to find where new logic should land — useful before starting any new work on this codebase
+4. If significant duplication was found, suggest consolidating clone groups **before** refactoring
+5. Suggest running `/spec-gen-plan-refactor` once the user has enough context to act, then `/spec-gen-execute-refactor` to apply the plan
+6. If the project has OpenSpec specs, suggest `/spec-gen-implement-feature` for new feature work (integrates specs + insertion points + drift check)
 
 ---
 
@@ -96,5 +116,5 @@ Based on the analysis, guide the user through the natural next actions in order:
 
 - **No code modifications** in this workflow
 - Never skip the duplication step — it determines the order of subsequent actions
-- Always present call graph and duplicate report results even if numbers are low
-- Next steps (Step 6) are suggestions, not automatic actions
+- Always present architecture overview, call graph, and duplicate report even if numbers are low
+- Next steps (Step 7) are suggestions, not automatic actions

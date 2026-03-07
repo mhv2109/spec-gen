@@ -1079,6 +1079,112 @@ export function test() {}
 
       expect(result).toBeNull();
     });
+
+    // ── NodeNext / ESM interop ──────────────────────────────────────────────
+    // TypeScript projects using "moduleResolution": "NodeNext" write imports
+    // with a .js extension even though the file on disk is .ts.
+    // e.g.  import { foo } from './utils.js'  →  resolves to  ./utils.ts
+    // The old implementation appended extensions on top of the existing one,
+    // producing paths like `utils.js.ts` that never exist on disk.
+
+    it('should resolve .js import to .ts file (NodeNext convention)', async () => {
+      const utilsPath = await createFile(tempDir, 'utils.ts', 'export const foo = 1;');
+
+      const result = await resolveImport('./utils.js', join(tempDir, 'app.ts'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(utilsPath);
+    });
+
+    it('should resolve .js import to .tsx file (NodeNext convention)', async () => {
+      const componentPath = await createFile(tempDir, 'Button.tsx', 'export const Button = () => null;');
+
+      const result = await resolveImport('./Button.js', join(tempDir, 'app.ts'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(componentPath);
+    });
+
+    it('should resolve .js import to index.ts inside a directory (NodeNext barrel)', async () => {
+      await mkdir(join(tempDir, 'components'), { recursive: true });
+      const indexPath = await createFile(tempDir, 'components/index.ts', 'export * from "./Button";');
+
+      // `import "./components/index.js"` should resolve to `components/index.ts`
+      const result = await resolveImport('./components/index.js', join(tempDir, 'app.ts'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(indexPath);
+    });
+
+    it('should still resolve plain extensionless import to .ts file', async () => {
+      const helperPath = await createFile(tempDir, 'helper.ts', 'export const bar = 2;');
+
+      const result = await resolveImport('./helper', join(tempDir, 'app.ts'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(helperPath);
+    });
+
+    it('should prefer exact match over extension-stripped match', async () => {
+      // Both `real.js` (JS) and `real.ts` (TS) exist — exact match wins.
+      const jsPath = await createFile(tempDir, 'real.js', 'export const x = 1;');
+      await createFile(tempDir, 'real.ts', 'export const x = 2;');
+
+      const result = await resolveImport('./real.js', join(tempDir, 'app.ts'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(jsPath);
+    });
+
+    // ── Python relative import resolution ──────────────────────────────────
+
+    it('should resolve Python single-dot relative import', async () => {
+      const utilsPath = await createFile(tempDir, 'utils.py', 'def helper(): pass');
+
+      const result = await resolveImport('.utils', join(tempDir, 'app.py'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(utilsPath);
+    });
+
+    it('should resolve Python double-dot relative import', async () => {
+      await mkdir(join(tempDir, 'pkg'), { recursive: true });
+      const modelsPath = await createFile(tempDir, 'models.py', 'class User: pass');
+
+      const result = await resolveImport('..models', join(tempDir, 'pkg', 'service.py'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(modelsPath);
+    });
+
+    it('should resolve Python package __init__.py', async () => {
+      await mkdir(join(tempDir, 'mypackage'), { recursive: true });
+      const initPath = await createFile(tempDir, 'mypackage/__init__.py', '');
+
+      const result = await resolveImport('.mypackage', join(tempDir, 'app.py'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(initPath);
+    });
+
+    it('should resolve Python dotted submodule path', async () => {
+      await mkdir(join(tempDir, 'db'), { recursive: true });
+      const modelsPath = await createFile(tempDir, 'db/models.py', 'class User: pass');
+
+      const result = await resolveImport('.db.models', join(tempDir, 'app.py'), {
+        baseDir: tempDir,
+      });
+
+      expect(result).toBe(modelsPath);
+    });
   });
 
   // ==========================================================================

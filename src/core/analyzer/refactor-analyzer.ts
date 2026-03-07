@@ -18,9 +18,11 @@
  *   high_fan_out      — fanOut >= HIGH_FAN_OUT (likely god function / orchestrator)
  *   multi_requirement — implements > SRP_MAX requirements (SRP violation)
  *   in_cycle          — part of a cyclic dependency (sccSize > 1)
+ *   in_clone_group    — appears in a duplicate code clone group
  */
 
 import type { SerializedCallGraph, FunctionNode } from './call-graph.js';
+import type { DuplicateDetectionResult } from './duplicate-detector.js';
 
 // ============================================================================
 // THRESHOLDS
@@ -29,6 +31,8 @@ import type { SerializedCallGraph, FunctionNode } from './call-graph.js';
 const HIGH_FAN_IN = 8;
 const HIGH_FAN_OUT = 8;
 const SRP_MAX_REQUIREMENTS = 2;
+/** Minimum clone group size to flag (functions appearing in ≥ N clones) */
+const MIN_CLONE_GROUP_SIZE = 2;
 
 /**
  * File path patterns for cross-cutting utility/logging modules.
@@ -59,7 +63,8 @@ export type RefactorIssue =
   | 'high_fan_in'
   | 'high_fan_out'
   | 'multi_requirement'
-  | 'in_cycle';
+  | 'in_cycle'
+  | 'in_clone_group';  // FIX: ajout du type manquant
 
 export interface RefactorEntry {
   function: string;
@@ -258,7 +263,8 @@ function computeSCCs(
  */
 export function analyzeForRefactoring(
   callGraph: SerializedCallGraph,
-  mappings?: MappingEntry[]
+  mappings?: MappingEntry[],
+  duplicates?: DuplicateDetectionResult
 ): RefactorReport {
   const nodes = callGraph.nodes;
   const edges = callGraph.edges;
@@ -324,6 +330,28 @@ export function analyzeForRefactoring(
     }
     if (sccSize > 1) {
       issues.push('in_cycle');
+    }
+    
+    // Check if this function appears in any clone group
+    if (duplicates && duplicates.cloneGroups.length > 0) {
+      const functionKey = `${node.name}@${node.filePath}`;
+      for (const group of duplicates.cloneGroups) {
+        if (group.instances.some(i => {
+          // Match by function name and file path (exact or partial match)
+          const instanceKey = `${i.functionName}@${i.file}`;
+          return instanceKey === functionKey ||
+                 (i.functionName === node.name && 
+                  (i.file === node.filePath ||
+                   node.filePath.endsWith('/' + i.file) ||
+                   i.file.endsWith('/' + node.filePath)));
+        })) {
+          // Only flag if clone group is significant (>= MIN_CLONE_GROUP_SIZE)
+          if (group.instances.length >= MIN_CLONE_GROUP_SIZE) {
+            issues.push('in_clone_group');
+            break;
+          }
+        }
+      }
     }
 
     const priorityScore = computePriorityScore(node, depth, sccSize, requirements.length, issues);
@@ -418,6 +446,9 @@ function computePriorityScore(
 
   // Cycles: +2 per cycle participant
   if (sccSize > 1) score += 2;
+
+  // Clone groups: +1.5 per clone group membership
+  if (issues.includes('in_clone_group')) score += 1.5;
 
   // Depth bonus: shallower functions are more impactful to refactor
   if (depth >= 0 && depth <= 2 && issues.length > 0) score += 0.5;

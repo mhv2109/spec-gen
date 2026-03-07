@@ -401,6 +401,7 @@ Priority: CLI flags > environment variables > config file > provider defaults.
 | `spec-gen drift` | Detect spec drift (static) | No |
 | `spec-gen drift --use-llm` | Detect spec drift (LLM-enhanced) | Yes |
 | `spec-gen run` | Full pipeline: init, analyze, generate | Yes |
+| `spec-gen view` | Launch interactive graph & spec viewer in the browser | No |
 | `spec-gen mcp` | Start MCP server (stdio, for Cline / Claude Code) | No |
 
 ### Global Options
@@ -455,6 +456,8 @@ spec-gen analyze [options]
   --max-files <n>        # Max files (default: 500)
   --include <glob>       # Additional include patterns
   --exclude <glob>       # Additional exclude patterns
+  --force                # Force re-analysis (bypass 1-hour cache)
+  --embed                # Build semantic vector index after analysis (requires embedding config)
 ```
 
 ### Verify Options
@@ -523,7 +526,22 @@ The repo ships a `.mcp.json` — edit the path and you are done:
 }
 ```
 
-The MCP tools (`analyze_codebase`, `check_spec_drift`, `get_refactor_report`, …) are then available directly in any Claude Code conversation — just ask naturally: *"analyse my codebase"*, *"check spec drift"*, *"help me refactor X"*.
+The tools are available directly in any Claude Code conversation. Just ask naturally — Claude calls the right tools automatically:
+
+```
+You:    Analyse my codebase and tell me what needs refactoring most urgently
+Claude: [analyze_codebase → get_refactor_report → analyze_impact on top result]
+        → Project summary, top issues ranked by priority, risk score and recommended
+          strategy for the highest-impact function
+
+You:    Are there any duplicate functions I should consolidate?
+Claude: [get_duplicate_report]
+        → Clone groups sorted by impact (exact / structural / near), file paths, line ranges
+
+You:    Show me everything that calls parseConfig and draw a diagram
+Claude: [get_subgraph with direction: "upstream", format: "mermaid"]
+        → Mermaid flowchart of the upstream call chain
+```
 
 #### Cline / Roo Code / Kilocode
 
@@ -541,13 +559,14 @@ Type one of the following commands in a conversation:
 |---------|:---:|-------------|
 | `/spec-gen-analyze-codebase` | No | Architecture overview, call graph highlights, top refactor issues |
 | `/spec-gen-check-spec-drift` | No | Detect code changes not reflected in specs; per-kind remediation guidance |
-| `/spec-gen-refactor-codebase` | No | Full guided refactoring loop with impact analysis, coverage gate, and verification |
+| `/spec-gen-plan-refactor` | No | Static analysis → impact assessment → written plan saved to `.spec-gen/refactor-plan.md` (no code changes) |
+| `/spec-gen-execute-refactor` | No | Read the plan and apply changes incrementally, with tests and diff verification after each step |
 
 `analyze_codebase`, `check_spec_drift`, and all refactoring tools run on **pure static analysis** — no LLM quota consumed. Only `spec-gen generate` (the one-time spec generation step) requires an API key.
 
 ### Cline Slash Commands
 
-`examples/cline-workflows/` contains three executable workflow files. Copy them to your project's `.clinerules/workflows/` to activate them as slash commands:
+`examples/cline-workflows/` contains four executable workflow files. Copy them to your project's `.clinerules/workflows/` to activate them as slash commands:
 
 ```bash
 mkdir -p .clinerules/workflows
@@ -558,20 +577,50 @@ cp /path/to/spec-gen/examples/cline-workflows/*.md .clinerules/workflows/
 |---------|-------------|
 | `/spec-gen-analyze-codebase` | Runs `analyze_codebase`, summarises the results (project type, file count, top 3 refactor issues, detected domains), shows the call graph highlights, and suggests next steps. |
 | `/spec-gen-check-spec-drift` | Runs `check_spec_drift`, presents issues by severity (gap / stale / uncovered / orphaned-spec), shows per-kind remediation commands, and optionally drills into affected file signatures. |
-| `/spec-gen-refactor-codebase` | Full refactoring loop: static analysis → prioritized report with coverage gate → impact assessment → Mermaid subgraph → low-risk entry points → proposed changes → verification. Optional final step covers dead-code detection and naming alignment (requires `spec-gen generate`). |
+| `/spec-gen-plan-refactor` | Runs static analysis, picks the highest-priority target with coverage gate, assesses impact and call graph, then writes a detailed plan to `.spec-gen/refactor-plan.md`. No code changes. |
+| `/spec-gen-execute-refactor` | Reads `.spec-gen/refactor-plan.md`, establishes a green baseline, and applies each planned change one at a time — with diff verification and test run after every step. Optional final step covers dead-code detection and naming alignment (requires `spec-gen generate`). |
 
-All three commands ask which directory to use, call the MCP tools directly, and guide you through the results without leaving the editor. They work in Cline, Roo Code, Kilocode, and any editor that supports the `.clinerules/workflows/` convention.
+All four commands ask which directory to use, call the MCP tools directly, and guide you through the results without leaving the editor. They work in Cline, Roo Code, Kilocode, and any editor that supports the `.clinerules/workflows/` convention.
 
 ### Tools
 
+All tools run on **pure static analysis** — no LLM quota consumed.
+
+**Analysis**
+
 | Tool | Description | Requires prior analysis |
-|------|-------------|------------------------|
-| `analyze_codebase` | Run full static analysis; returns project metadata, call graph stats, and top-10 refactor priorities. Results cached for 1 hour (bypass with `force: true`). | No |
-| `get_refactor_report` | Prioritized list of functions to refactor: unreachable code, hub overload (high fan-in), god functions (high fan-out), SRP violations, cyclic deps. | Yes |
-| `get_call_graph` | Hub functions, entry points, and architectural layer violations for the project. | Yes |
-| `get_signatures` | Compact function/class signatures per file. Filter by path substring with `filePattern`. | Yes |
-| `get_subgraph` | Depth-limited subgraph centred on a function name. Direction: `downstream` (what it calls), `upstream` (who calls it), or `both`. Output as JSON or Mermaid diagram. | Yes |
-| `get_mapping` | Requirement→function mapping from `spec-gen generate`. Shows which functions implement which spec requirements, confidence level, and orphan functions with no spec coverage. | Yes (generate) |
+|------|-------------|:---:|
+| `analyze_codebase` | Run full static analysis: repo structure, dependency graph, call graph (hub functions, entry points, layer violations), and top refactoring priorities. Results cached for 1 hour (`force: true` to bypass). | No |
+| `get_call_graph` | Hub functions (high fan-in), entry points (no internal callers), and architectural layer violations. Supports TypeScript, JavaScript, Python, Go, Rust, Ruby, Java. | Yes |
+| `get_signatures` | Compact function/class signatures per file. Filter by path substring with `filePattern`. Useful for understanding a module's public API without reading full source. | Yes |
+| `get_duplicate_report` | Detect duplicate code: Type 1 (exact clones), Type 2 (structural — renamed variables), Type 3 (near-clones with Jaccard similarity ≥ 0.7). Groups sorted by impact. | Yes |
+
+**Refactoring**
+
+| Tool | Description | Requires prior analysis |
+|------|-------------|:---:|
+| `get_refactor_report` | Prioritized list of functions with structural issues: unreachable code, hub overload (high fan-in), god functions (high fan-out), SRP violations, cyclic dependencies. | Yes |
+| `analyze_impact` | Deep impact analysis for a specific function: fan-in/fan-out, upstream call chain, downstream critical path, risk score (0–100), blast radius, and recommended strategy. | Yes |
+| `get_low_risk_refactor_candidates` | Safest functions to refactor first: low fan-in, low fan-out, not a hub, no cyclic involvement. Best starting point for incremental, low-risk sessions. | Yes |
+| `get_leaf_functions` | Functions that make no internal calls (leaves of the call graph). Zero downstream blast radius. Sorted by fan-in by default — most-called leaves have the best unit-test ROI. | Yes |
+| `get_critical_hubs` | Highest-impact hub functions ranked by criticality. Each hub gets a stability score (0–100) and a recommended approach: extract, split, facade, or delegate. | Yes |
+
+**Navigation**
+
+| Tool | Description | Requires prior analysis |
+|------|-------------|:---:|
+| `get_subgraph` | Depth-limited subgraph centred on a function. Direction: `downstream` (what it calls), `upstream` (who calls it), or `both`. Output as JSON or Mermaid diagram. | Yes |
+| `get_architecture_overview` | High-level cluster map: roles (entry layer, orchestrator, core utilities, API layer, internal), inter-cluster dependencies, global entry points, and critical hubs. No LLM required. | Yes |
+| `get_function_skeleton` | Noise-stripped view of a source file: logs, inline comments, and non-JSDoc block comments removed. Signatures, control flow, return/throw, and call expressions preserved. Returns reduction %. | No |
+| `suggest_insertion_points` | Semantic search over the vector index to find the best existing functions to extend or hook into when implementing a new feature. Returns ranked candidates with role and strategy. | Yes (+ `--embed`) |
+| `search_code` | Natural-language semantic search over indexed functions. Returns the closest matches by meaning with similarity score. Useful for navigating unfamiliar codebases. | Yes (+ `--embed`) |
+
+**Specs**
+
+| Tool | Description | Requires prior analysis |
+|------|-------------|:---:|
+| `get_mapping` | Requirement→function mapping produced by `spec-gen generate`. Shows which functions implement which spec requirements, confidence level, and orphan functions with no spec coverage. | Yes (generate) |
+| `check_spec_drift` | Detect code changes not reflected in OpenSpec specs. Compares git-changed files against spec coverage maps. Issues: gap / stale / uncovered / orphaned-spec / adr-gap. | Yes (generate) |
 
 ### Parameters
 
@@ -608,13 +657,170 @@ domain       string    Optional domain filter (e.g. "auth", "crawler")
 orphansOnly  boolean   Return only orphan functions (default: false)
 ```
 
+**`get_duplicate_report`**
+```
+directory  string   Absolute path to the project directory
+```
+
+**`check_spec_drift`**
+```
+directory  string    Absolute path to the project directory
+base       string    Git ref to compare against (default: auto-detect main/master)
+files      string[]  Specific files to check (default: all changed files)
+domains    string[]  Only check these spec domains (default: all)
+failOn     string    Minimum severity to report: "error" | "warning" | "info" (default: "warning")
+maxFiles   number    Max changed files to analyze (default: 100)
+```
+
+**`analyze_impact`**
+```
+directory  string   Absolute path to the project directory
+symbol     string   Function or method name (exact or partial match)
+depth      number   Traversal depth for upstream/downstream chains (default: 2)
+```
+
+**`get_low_risk_refactor_candidates`**
+```
+directory    string   Absolute path to the project directory
+limit        number   Max candidates to return (default: 5)
+filePattern  string   Optional path substring filter (e.g. "services", ".py")
+```
+
+**`get_leaf_functions`**
+```
+directory    string   Absolute path to the project directory
+limit        number   Max results to return (default: 20)
+filePattern  string   Optional path substring filter
+sortBy       string   "fanIn" (default) | "name" | "file"
+```
+
+**`get_critical_hubs`**
+```
+directory  string   Absolute path to the project directory
+limit      number   Max hubs to return (default: 10)
+minFanIn   number   Minimum fan-in threshold to be considered a hub (default: 3)
+```
+
+**`get_architecture_overview`**
+```
+directory  string   Absolute path to the project directory
+```
+
+**`get_function_skeleton`**
+```
+directory  string   Absolute path to the project directory
+filePath   string   Path to the file, relative to the project directory
+```
+
+**`suggest_insertion_points`**
+```
+directory  string   Absolute path to the project directory
+query      string   Natural-language description of the feature to implement
+limit      number   Max candidates to return (default: 5)
+```
+
+**`search_code`**
+```
+directory  string   Absolute path to the project directory
+query      string   Natural-language query, e.g. "authenticate user with JWT"
+limit      number   Max results (default: 10)
+language   string   Filter by language: "TypeScript" | "Python" | "Go" | …
+minFanIn   number   Only return functions with at least this many callers
+```
+
 ### Typical workflow
 
+**Scenario A — Initial exploration**
 ```
-1. analyze_codebase({ directory: "/path/to/project" })
-2. get_refactor_report({ directory: "/path/to/project" })
-3. get_subgraph({ directory: "...", functionName: "run", direction: "downstream", format: "mermaid" })
-4. get_mapping({ directory: "...", orphansOnly: true })   # dead code candidates
+1. analyze_codebase({ directory })                    # repo structure + call graph + top issues
+2. get_call_graph({ directory })                      # hub functions + layer violations
+3. get_duplicate_report({ directory })                # clone groups to consolidate
+4. get_refactor_report({ directory })                 # prioritized refactoring candidates
+```
+
+**Scenario B — Targeted refactoring**
+```
+1. analyze_impact({ directory, symbol: "myFunction" })       # risk score + blast radius + strategy
+2. get_subgraph({ directory, functionName: "myFunction",     # Mermaid call neighbourhood
+                  direction: "both", format: "mermaid" })
+3. get_low_risk_refactor_candidates({ directory,             # safe entry points to extract first
+                                      filePattern: "myFile" })
+4. get_leaf_functions({ directory, filePattern: "myFile" })  # zero-risk extraction targets
+```
+
+**Scenario C — Spec maintenance**
+```
+1. check_spec_drift({ directory })                    # code changes not reflected in specs
+2. get_mapping({ directory, orphansOnly: true })      # functions with no spec coverage
+```
+
+## Interactive Graph Viewer
+
+`spec-gen view` launches a local React app that visualises your codebase analysis and lets you explore spec requirements side-by-side with the dependency graph.
+
+```bash
+# Run analysis first (if not already done)
+spec-gen analyze
+
+# Launch the viewer (opens browser automatically)
+spec-gen view
+
+# Options
+spec-gen view --port 4000          # custom port (default: 5173)
+spec-gen view --host 0.0.0.0       # expose on LAN
+spec-gen view --no-open            # don't open browser automatically
+spec-gen view --analysis <path>    # custom analysis dir (default: .spec-gen/analysis/)
+spec-gen view --spec <path>        # custom spec dir (default: ./openspec/specs/)
+```
+
+### Views
+
+| View | Description |
+|------|-------------|
+| **Clusters** | Colour-coded architectural clusters with expandable member nodes |
+| **Flat** | Force-directed dependency graph (all nodes) |
+| **Architecture** | High-level cluster map: role-coloured boxes, inter-cluster dependency arrows |
+
+### Right panel tabs (select a node to activate)
+
+| Tab | Content |
+|-----|---------|
+| **Node** | File metadata: exports, language, score |
+| **Links** | Direct callers and callees |
+| **Blast** | Downstream impact radius |
+| **Spec** | Requirements linked to the selected file — body, domain, confidence |
+| **Skeleton** | Noise-stripped source: logs and comments removed, structure preserved |
+| **Info** | Global stats and top-ranked files |
+
+### Search
+
+The search bar filters all three views simultaneously (text match on name, path, exports, tags). If a vector index was built with `--embed`, typing ≥ 3 characters also queries the semantic index and shows the top 5 function matches in a dropdown.
+
+### Automatic data loading
+
+The viewer auto-loads all available data on startup:
+
+| Endpoint | Source | Required? |
+|----------|--------|-----------|
+| `/api/dependency-graph` | `.spec-gen/analysis/dependency-graph.json` | Yes |
+| `/api/llm-context` | `.spec-gen/analysis/llm-context.json` | No |
+| `/api/refactor-priorities` | `.spec-gen/analysis/refactor-priorities.json` | No |
+| `/api/mapping` | `.spec-gen/analysis/mapping.json` | No |
+| `/api/spec-requirements` | `openspec/specs/**/*.md` + `mapping.json` | No |
+| `/api/skeleton?file=` | Source file on disk | No |
+| `/api/search?q=` | `.spec-gen/analysis/vector-index/` | No (`--embed`) |
+
+Run `spec-gen generate` to produce `mapping.json` and the spec files. Once present, the **Spec** tab shows the full requirement body for each selected file.
+
+### View Options
+
+```bash
+spec-gen view [options]
+  --analysis <path>    Analysis directory (default: .spec-gen/analysis/)
+  --spec <path>        Spec files directory (default: ./openspec/specs/)
+  --port <n>           Port (default: 5173)
+  --host <host>        Bind host (default: 127.0.0.1; use 0.0.0.0 for LAN)
+  --no-open            Skip automatic browser open
 ```
 
 ## Output
@@ -645,10 +851,45 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 |------|-------------|
 | `repo-structure.json` | Project structure and metadata |
 | `dependency-graph.json` | Import/export relationships |
-| `llm-context.json` | Context prepared for LLM |
+| `llm-context.json` | Context prepared for LLM (signatures, call graph) |
 | `dependencies.mermaid` | Visual dependency graph |
 | `SUMMARY.md` | Human-readable analysis summary |
+| `call-graph.json` | Function-level call graph (7 languages) |
+| `refactor-priorities.json` | Refactoring issues by file and function |
 | `mapping.json` | Requirement→function mapping (produced by `generate`) |
+| `vector-index/` | LanceDB semantic index (produced by `--embed`) |
+
+`spec-gen analyze` also writes **`ARCHITECTURE.md`** to your project root — a Markdown overview of module clusters, entry points, and critical hubs, refreshed on every run.
+
+## Semantic Search
+
+`spec-gen analyze --embed` builds a vector index over all functions in the call graph, enabling natural-language search via the `search_code` and `suggest_insertion_points` MCP tools, and the search bar in the viewer.
+
+### Embedding configuration
+
+Provide an OpenAI-compatible embedding endpoint (Ollama, OpenAI, Mistral, etc.) via environment variables or `.spec-gen/config.json`:
+
+**Environment variables:**
+```bash
+EMBED_BASE_URL=https://api.openai.com/v1
+EMBED_MODEL=text-embedding-3-small
+EMBED_API_KEY=sk-...         # optional for local servers
+
+# Then run:
+spec-gen analyze --embed
+```
+
+**Config file (`.spec-gen/config.json`):**
+```json
+{
+  "embedding": {
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "nomic-embed-text"
+  }
+}
+```
+
+The index is stored in `.spec-gen/analysis/vector-index/` and is automatically used by the viewer's search bar and the `search_code` / `suggest_insertion_points` MCP tools.
 
 ## Configuration
 

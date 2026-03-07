@@ -29,6 +29,7 @@ export { specGenGenerate } from './generate.js';
 export { specGenVerify } from './verify.js';
 export { specGenDrift } from './drift.js';
 export { specGenRun } from './run.js';
+export { specGenGetSpecRequirements } from './specs.js';
 
 // API option/result types
 export type {
@@ -49,9 +50,10 @@ export type {
 } from './types.js';
 
 // Re-export key core types that consumers will need
-export type { DriftResult, DriftIssue, DriftSeverity, SpecGenConfig } from '../types/index.js';
+export type { DriftResult, DriftSeverity, SpecGenConfig } from '../types/index.js';
 export type { RepositoryMap } from './types.js';
 export type { DependencyGraphResult } from '../core/analyzer/dependency-graph.js';
 export type { PipelineResult } from '../core/generator/spec-pipeline.js';
 export type { GenerationReport } from '../core/generator/openspec-writer.js';
 export type { VerificationReport } from '../core/verifier/verification-engine.js';
+export type { SpecRequirement } from './specs.js';

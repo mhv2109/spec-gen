@@ -38,9 +38,12 @@ import { join, resolve } from 'node:path';
 import { runAnalysis } from './analyze.js';
 import { analyzeForRefactoring } from '../../core/analyzer/refactor-analyzer.js';
 import { formatSignatureMaps } from '../../core/analyzer/signature-extractor.js';
+import { getSkeletonContent, detectLanguage, isSkeletonWorthIncluding } from '../../core/analyzer/code-shaper.js';
+import { getFileGodFunctions, extractSubgraph } from '../../core/analyzer/subgraph-extractor.js';
 import type { LLMContext } from '../../core/analyzer/artifact-generator.js';
 import type { SerializedCallGraph, FunctionNode } from '../../core/analyzer/call-graph.js';
 import type { MappingArtifact } from '../../core/generator/mapping-generator.js';
+import { buildArchitectureOverview } from '../../core/analyzer/architecture-writer.js';
 import {
   isGitRepository,
   getChangedFiles,
@@ -78,6 +81,24 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_architecture_overview',
+    description:
+      'Return a high-level architecture map of the project: domain clusters with their ' +
+      'key files and roles, cross-cluster dependencies, global entry points, and critical hubs. ' +
+      'Start here when onboarding to an unknown codebase or before planning a large feature. ' +
+      'Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory (must have been analyzed first)',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  {
     name: 'get_refactor_report',
     description:
       'Return a prioritized list of functions that need refactoring, based on ' +
@@ -108,6 +129,25 @@ const TOOL_DEFINITIONS = [
         directory: {
           type: 'string',
           description: 'Absolute path to the project directory',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  {
+    name: 'get_duplicate_report',
+    description:
+      'Detect duplicate code (clone groups) across the codebase using pure static analysis. ' +
+      'Detects Type 1 (exact clones — identical after whitespace/comment normalization), ' +
+      'Type 2 (structural clones — same structure with renamed variables), and ' +
+      'Type 3 (near-clones with Jaccard similarity ≥ 0.7 on token n-grams). ' +
+      'No LLM calls required. Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory (must have been analyzed first)',
         },
       },
       required: ['directory'],
@@ -354,6 +394,125 @@ const TOOL_DEFINITIONS = [
       required: ['directory'],
     },
   },
+  {
+    name: 'get_function_skeleton',
+    description:
+      'Return a noise-stripped skeleton of a source file: logs, inline comments, and ' +
+      'non-JSDoc block comments are removed while signatures, control flow (if/for/try), ' +
+      'return/throw statements, and call expressions are preserved. ' +
+      'Use this before refactoring a god function to get a compact structural view ' +
+      'without reading thousands of lines of raw source.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Path to the file, relative to the project directory',
+        },
+      },
+      required: ['directory', 'filePath'],
+    },
+  },
+  {
+    name: 'get_god_functions',
+    description:
+      'Detect god functions (high fan-out, likely orchestrators) in the project or in a ' +
+      'specific file, and return their call-graph neighborhood. ' +
+      'Use this to identify which functions need to be refactored and understand what ' +
+      'logical blocks to extract. Run analyze_codebase first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Optional: restrict search to this file (relative path)',
+        },
+        fanOutThreshold: {
+          type: 'number',
+          description: 'Minimum fan-out to be considered a god function (default: 8)',
+        },
+      },
+      required: ['directory'],
+    },
+  },
+  {
+    name: 'suggest_insertion_points',
+    description:
+      'Find the best places in the codebase to implement a new feature described in natural language. ' +
+      'Combines semantic similarity with structural analysis (entry points, orchestrators, hubs) ' +
+      'to return ranked insertion candidates with an actionable strategy for each. ' +
+      'Ideal before implementing a feature: run this first, then use get_subgraph or ' +
+      'get_function_skeleton on the top candidates to understand the local context. ' +
+      'Requires a vector index built with "spec-gen analyze --embed".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        description: {
+          type: 'string',
+          description:
+            'Natural language description of the feature to implement, ' +
+            'e.g. "add retry mechanism for HTTP requests" or "validate user email on registration"',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of candidates to return (default: 5)',
+        },
+        language: {
+          type: 'string',
+          description: 'Filter by language: "TypeScript", "Python", "Go", "Rust", "Ruby", "Java"',
+        },
+      },
+      required: ['directory', 'description'],
+    },
+  },
+  {
+    name: 'search_code',
+    description:
+      'Semantic search over indexed functions using a natural language query. ' +
+      'Returns the closest functions by meaning — useful for finding implementations, ' +
+      'understanding how a concept is handled, or navigating unfamiliar codebases. ' +
+      'Requires a vector index built with "spec-gen analyze --embed". ' +
+      'Configure the embedding endpoint via EMBED_BASE_URL + EMBED_MODEL env vars ' +
+      'or the "embedding" section in .spec-gen/config.json.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: 'Absolute path to the project directory',
+        },
+        query: {
+          type: 'string',
+          description: 'Natural language query, e.g. "authenticate user with JWT"',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 10)',
+        },
+        language: {
+          type: 'string',
+          description: 'Filter by language: "TypeScript", "Python", "Go", "Rust", "Ruby", "Java"',
+        },
+        minFanIn: {
+          type: 'number',
+          description: 'Only return functions with at least this many callers (hub filter)',
+        },
+      },
+      required: ['directory', 'query'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -575,6 +734,65 @@ export async function handleGetCallGraph(directory: string): Promise<unknown> {
     })),
     layerViolations: cg.layerViolations,
   };
+}
+
+// ============================================================================
+// GET ARCHITECTURE OVERVIEW
+// ============================================================================
+
+/**
+ * High-level architecture map: clusters, cross-cluster deps, entry points, hubs.
+ * Reads dependency-graph.json + llm-context.json (call graph).
+ * Ideal as a first tool call when exploring an unknown codebase.
+ */
+export async function handleGetArchitectureOverview(directory: string): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+
+  // Load dependency graph (clusters live here)
+  let depGraph: import('../../core/analyzer/dependency-graph.js').DependencyGraphResult | null = null;
+  try {
+    const raw = await readFile(join(absDir, '.spec-gen', 'analysis', 'dependency-graph.json'), 'utf-8');
+    depGraph = JSON.parse(raw) as import('../../core/analyzer/dependency-graph.js').DependencyGraphResult;
+  } catch {
+    // ignore — report below
+  }
+
+  const ctx = await readCachedContext(absDir);
+
+  if (!depGraph && !ctx) {
+    return { error: 'No analysis found. Run analyze_codebase first.' };
+  }
+
+  const overview = buildArchitectureOverview(depGraph, ctx, absDir);
+  return { summary: overview.summary, clusters: overview.clusters, globalEntryPoints: overview.globalEntryPoints, criticalHubs: overview.criticalHubs };
+}
+
+/**
+ * Read the cached duplicate detection result produced during `analyze`.
+ *
+ * Returns clone groups (exact, structural, near) and summary stats.
+ * Requires a prior `analyze_codebase` call.
+ */
+export async function handleGetDuplicateReport(directory: string): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const cachePath = join(absDir, '.spec-gen', 'analysis', 'duplicates.json');
+
+  let raw: string;
+  try {
+    raw = await readFile(cachePath, 'utf-8');
+  } catch {
+    return {
+      error:
+        'No duplicate report found. Run analyze_codebase first ' +
+        '(duplicates.json is generated during analysis).',
+    };
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { error: 'Duplicate report cache is corrupted. Re-run analyze_codebase.' };
+  }
 }
 
 /**
@@ -1354,6 +1572,373 @@ export async function handleCheckSpecDrift(
 }
 
 // ============================================================================
+// GOD FUNCTION + SKELETON HANDLERS
+// ============================================================================
+
+/**
+ * Return a noise-stripped skeleton of a source file.
+ * Logs, inline comments, and non-JSDoc block comments are removed.
+ */
+export async function handleGetFunctionSkeleton(
+  directory: string,
+  filePath: string,
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const absFile = join(absDir, filePath);
+
+  let source: string;
+  try {
+    source = await readFile(absFile, 'utf-8');
+  } catch {
+    return { error: `File not found: ${filePath}` };
+  }
+
+  const language = detectLanguage(filePath);
+  const skeleton = getSkeletonContent(source, language);
+  const worthIncluding = isSkeletonWorthIncluding(source, skeleton);
+
+  return {
+    filePath,
+    language,
+    originalLines: source.split('\n').length,
+    skeletonLines: skeleton.split('\n').length,
+    reductionPct: Math.round((1 - skeleton.length / source.length) * 100),
+    worthIncluding,
+    skeleton,
+  };
+}
+
+/**
+ * Detect god functions (high fan-out) in the project or in a specific file,
+ * and return their call-graph neighborhood for refactoring guidance.
+ */
+export async function handleGetGodFunctions(
+  directory: string,
+  filePath?: string,
+  fanOutThreshold = 8,
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const ctx = await readCachedContext(absDir);
+
+  if (!ctx) return { error: 'No analysis found. Run analyze_codebase first.' };
+  if (!ctx.callGraph) return { error: 'Call graph not available. Re-run analyze_codebase.' };
+
+  const cg = ctx.callGraph as SerializedCallGraph;
+
+  // Find candidates: either in specific file or across whole project
+  let candidates: FunctionNode[];
+  if (filePath) {
+    candidates = getFileGodFunctions(cg, filePath, fanOutThreshold);
+  } else {
+    candidates = cg.nodes.filter(n => n.fanOut >= fanOutThreshold);
+  }
+
+  if (candidates.length === 0) {
+    return {
+      threshold: fanOutThreshold,
+      count: 0,
+      godFunctions: [],
+      message: `No god functions found with fanOut >= ${fanOutThreshold}`,
+    };
+  }
+
+  // For each candidate, extract its subgraph
+  const godFunctions = candidates
+    .sort((a, b) => b.fanOut - a.fanOut)
+    .map(fn => {
+      const sub = extractSubgraph(cg, fn);
+      const directCallees = [...new Set(
+        sub.edges.filter(([from]) => from === fn.name).map(([, to]) => to)
+      )];
+      return {
+        name: fn.name,
+        file: fn.filePath,
+        className: fn.className,
+        fanIn: fn.fanIn,
+        fanOut: fn.fanOut,
+        directCallees,
+        subgraphNodes: sub.nodes.length,
+      };
+    });
+
+  return {
+    threshold: fanOutThreshold,
+    count: godFunctions.length,
+    godFunctions,
+  };
+}
+
+// ============================================================================
+// SEMANTIC SEARCH HANDLER
+// ============================================================================
+
+/**
+ * Semantic search over the vector index built by "spec-gen analyze --embed".
+ *
+ * The embedding endpoint is resolved in priority order:
+ *   1. EMBED_BASE_URL + EMBED_MODEL environment variables
+ *   2. "embedding" section in .spec-gen/config.json
+ */
+export async function handleSearchCode(
+  directory: string,
+  query: string,
+  limit = 10,
+  language?: string,
+  minFanIn?: number
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const outputDir = join(absDir, '.spec-gen', 'analysis');
+
+  const { VectorIndex } = await import('../../core/analyzer/vector-index.js');
+  const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
+
+  if (!VectorIndex.exists(outputDir)) {
+    return {
+      error:
+        'No vector index found. Run "spec-gen analyze --embed" first, ' +
+        'then configure EMBED_BASE_URL and EMBED_MODEL.',
+    };
+  }
+
+  let embedSvc: InstanceType<typeof EmbeddingService>;
+  try {
+    embedSvc = EmbeddingService.fromEnv();
+  } catch {
+    const cfg = await readSpecGenConfig(absDir);
+    if (!cfg) {
+      return {
+        error:
+          'No embedding configuration found. ' +
+          'Set EMBED_BASE_URL and EMBED_MODEL env vars, ' +
+          'or add an "embedding" section to .spec-gen/config.json.',
+      };
+    }
+    const svcFromConfig = EmbeddingService.fromConfig(cfg);
+    if (!svcFromConfig) {
+      return {
+        error:
+          'No embedding configuration found. ' +
+          'Set EMBED_BASE_URL and EMBED_MODEL env vars, ' +
+          'or add an "embedding" section to .spec-gen/config.json.',
+      };
+    }
+    embedSvc = svcFromConfig;
+  }
+
+  limit = Math.max(1, Math.min(limit, 100));
+
+  const results = await VectorIndex.search(outputDir, query, embedSvc, {
+    limit,
+    language,
+    minFanIn,
+  });
+
+  return {
+    query,
+    count: results.length,
+    results: results.map(r => ({
+      score: r.score,
+      name: r.record.name,
+      filePath: r.record.filePath,
+      className: r.record.className || undefined,
+      language: r.record.language,
+      signature: r.record.signature || undefined,
+      docstring: r.record.docstring || undefined,
+      fanIn: r.record.fanIn,
+      fanOut: r.record.fanOut,
+      isHub: r.record.isHub,
+      isEntryPoint: r.record.isEntryPoint,
+    })),
+  };
+}
+
+// ============================================================================
+// SUGGEST INSERTION POINTS
+// ============================================================================
+
+type InsertionRole = 'entry_point' | 'orchestrator' | 'hub' | 'utility' | 'internal';
+type InsertionStrategy =
+  | 'extend_entry_point'
+  | 'add_orchestration_step'
+  | 'cross_cutting_hook'
+  | 'extract_shared_logic'
+  | 'call_alongside';
+
+interface InsertionCandidate {
+  rank: number;
+  score: number;          // composite score (0–1, higher = better)
+  semanticDistance: number; // raw cosine distance (lower = closer)
+  name: string;
+  filePath: string;
+  className?: string;
+  language: string;
+  signature?: string;
+  docstring?: string;
+  role: InsertionRole;
+  insertionStrategy: InsertionStrategy;
+  reason: string;
+  fanIn: number;
+  fanOut: number;
+  isHub: boolean;
+  isEntryPoint: boolean;
+}
+
+function classifyRole(fanIn: number, fanOut: number, isHub: boolean, isEntryPoint: boolean): InsertionRole {
+  if (isEntryPoint) return 'entry_point';
+  if (isHub) return 'hub';
+  if (fanOut >= 5) return 'orchestrator';
+  if (fanIn <= 1) return 'utility';
+  return 'internal';
+}
+
+function deriveStrategy(role: InsertionRole): InsertionStrategy {
+  switch (role) {
+    case 'entry_point':   return 'extend_entry_point';
+    case 'orchestrator':  return 'add_orchestration_step';
+    case 'hub':           return 'cross_cutting_hook';
+    case 'utility':       return 'extract_shared_logic';
+    default:              return 'call_alongside';
+  }
+}
+
+function buildReason(
+  name: string,
+  role: InsertionRole,
+  strategy: InsertionStrategy,
+  fanIn: number,
+  fanOut: number
+): string {
+  switch (strategy) {
+    case 'extend_entry_point':
+      return `${name} is an entry point (no internal callers). Add your feature here or create a sibling entry point that delegates to it.`;
+    case 'add_orchestration_step':
+      return `${name} orchestrates ${fanOut} downstream calls. Insert your feature as a new step in this pipeline.`;
+    case 'cross_cutting_hook':
+      return `${name} is called by ${fanIn} functions — adding logic here affects the entire callsite surface.`;
+    case 'extract_shared_logic':
+      return `${name} is a low-traffic utility. Shared logic for your feature can live here or be extracted alongside it.`;
+    default:
+      return `${name} is semantically close to your feature and operates in the same domain. Extend or call alongside it.`;
+  }
+}
+
+/**
+ * Composite score = (1 - semanticDistance) * 0.6 + structuralBonus * 0.4
+ * Structural bonus rewards entry points and orchestrators (most actionable insertion spots).
+ */
+function compositeScore(
+  semanticDistance: number,
+  role: InsertionRole
+): number {
+  const semantic = Math.max(0, 1 - semanticDistance);
+  const structuralBonus: Record<InsertionRole, number> = {
+    entry_point:  1.0,
+    orchestrator: 0.8,
+    hub:          0.6,
+    internal:     0.4,
+    utility:      0.3,
+  };
+  return semantic * 0.6 + structuralBonus[role] * 0.4;
+}
+
+/**
+ * Find the best places in the codebase to implement a new feature.
+ * Combines semantic similarity with structural analysis.
+ */
+export async function handleSuggestInsertionPoints(
+  directory: string,
+  description: string,
+  limit = 5,
+  language?: string
+): Promise<unknown> {
+  const absDir = await validateDirectory(directory);
+  const outputDir = join(absDir, '.spec-gen', 'analysis');
+
+  const { VectorIndex } = await import('../../core/analyzer/vector-index.js');
+  const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
+
+  if (!VectorIndex.exists(outputDir)) {
+    return {
+      error:
+        'No vector index found. Run "spec-gen analyze --embed" first, ' +
+        'then configure EMBED_BASE_URL and EMBED_MODEL.',
+    };
+  }
+
+  let embedSvc: InstanceType<typeof EmbeddingService>;
+  try {
+    embedSvc = EmbeddingService.fromEnv();
+  } catch {
+    const cfg = await readSpecGenConfig(absDir);
+    if (!cfg) {
+      return {
+        error:
+          'No embedding configuration found. Set EMBED_BASE_URL and EMBED_MODEL env vars, ' +
+          'or add an "embedding" section to .spec-gen/config.json.',
+      };
+    }
+    const svcFromConfig = EmbeddingService.fromConfig(cfg);
+    if (!svcFromConfig) {
+      return {
+        error:
+          'No embedding configuration found. Set EMBED_BASE_URL and EMBED_MODEL env vars, ' +
+          'or add an "embedding" section to .spec-gen/config.json.',
+      };
+    }
+    embedSvc = svcFromConfig;
+  }
+
+  limit = Math.max(1, Math.min(limit, 20));
+
+  // Fetch more candidates than needed; re-rank by composite score
+  const rawResults = await VectorIndex.search(outputDir, description, embedSvc, {
+    limit: limit * 4,
+    language,
+  });
+
+  const candidates: InsertionCandidate[] = rawResults.map(r => {
+    const role = classifyRole(r.record.fanIn, r.record.fanOut, r.record.isHub, r.record.isEntryPoint);
+    const strategy = deriveStrategy(role);
+    const score = compositeScore(r.score, role);
+    return {
+      rank: 0, // assigned below
+      score,
+      semanticDistance: r.score,
+      name: r.record.name,
+      filePath: r.record.filePath,
+      className: r.record.className || undefined,
+      language: r.record.language,
+      signature: r.record.signature || undefined,
+      docstring: r.record.docstring || undefined,
+      role,
+      insertionStrategy: strategy,
+      reason: buildReason(r.record.name, role, strategy, r.record.fanIn, r.record.fanOut),
+      fanIn: r.record.fanIn,
+      fanOut: r.record.fanOut,
+      isHub: r.record.isHub,
+      isEntryPoint: r.record.isEntryPoint,
+    };
+  });
+
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates.slice(0, limit).map((c, i) => ({ ...c, rank: i + 1 }));
+
+  return {
+    description,
+    count: top.length,
+    candidates: top,
+    nextSteps: top.length > 0
+      ? [
+          `Run get_function_skeleton on "${top[0].filePath}" to see the internal structure of ${top[0].name}`,
+          `Run get_subgraph on "${top[0].name}" to understand its call neighborhood`,
+          `After implementing, run check_spec_drift to verify the code matches the spec`,
+        ]
+      : ['No candidates found. Try a broader description or run "spec-gen analyze --embed" to build the index.'],
+  };
+}
+
+
+// ============================================================================
 // MCP SERVER
 // ============================================================================
 
@@ -1376,6 +1961,9 @@ async function startMcpServer(): Promise<void> {
       if (name === 'analyze_codebase') {
         const { directory, force = false } = args as { directory: string; force?: boolean };
         result = await handleAnalyzeCodebase(directory, force);
+      } else if (name === 'get_architecture_overview') {
+        const { directory } = args as { directory: string };
+        result = await handleGetArchitectureOverview(directory);
       } else if (name === 'get_refactor_report') {
         const { directory } = args as { directory: string };
         result = await handleGetRefactorReport(directory);
@@ -1408,10 +1996,28 @@ async function startMcpServer(): Promise<void> {
         const { directory, limit = 10, minFanIn = 3 } =
           args as { directory: string; limit?: number; minFanIn?: number };
         result = await handleGetCriticalHubs(directory, limit, minFanIn);
+      } else if (name === 'get_duplicate_report') {
+        const { directory } = args as { directory: string };
+        result = await handleGetDuplicateReport(directory);
+      } else if (name === 'get_function_skeleton') {
+        const { directory, filePath } = args as { directory: string; filePath: string };
+        result = await handleGetFunctionSkeleton(directory, filePath);
+      } else if (name === 'get_god_functions') {
+        const { directory, filePath, fanOutThreshold = 8 } =
+          args as { directory: string; filePath?: string; fanOutThreshold?: number };
+        result = await handleGetGodFunctions(directory, filePath, fanOutThreshold);
       } else if (name === 'check_spec_drift') {
         const { directory, base = 'auto', files = [], domains = [], failOn = 'warning', maxFiles = 100 } =
           args as { directory: string; base?: string; files?: string[]; domains?: string[]; failOn?: 'error' | 'warning' | 'info'; maxFiles?: number };
         result = await handleCheckSpecDrift(directory, base, files, domains, failOn, maxFiles);
+      } else if (name === 'search_code') {
+        const { directory, query, limit = 10, language, minFanIn } =
+          args as { directory: string; query: string; limit?: number; language?: string; minFanIn?: number };
+        result = await handleSearchCode(directory, query, limit, language, minFanIn);
+      } else if (name === 'suggest_insertion_points') {
+        const { directory, description, limit = 5, language } =
+          args as { directory: string; description: string; limit?: number; language?: string };
+        result = await handleSuggestInsertionPoints(directory, description, limit, language);
       } else {
         return {
           content: [{ type: 'text', text: `Unknown tool: ${name}` }],

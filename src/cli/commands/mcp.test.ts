@@ -29,12 +29,28 @@ vi.mock('../../core/drift/index.js', () => ({
 vi.mock('../../core/services/config-manager.js', () => ({
   readSpecGenConfig: vi.fn(),
 }));
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+
+vi.mock('../../core/analyzer/vector-index.js', () => ({
+  VectorIndex: {
+    exists: vi.fn(),
+    search: vi.fn(),
+    build: vi.fn(),
+  },
+}));
+
+vi.mock('../../core/analyzer/embedding-service.js', () => ({
+  EmbeddingService: {
+    fromEnv: vi.fn(),
+    fromConfig: vi.fn(),
+  },
+}));
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   validateDirectory,
   sanitizeMcpError,
+  handleGetArchitectureOverview,
   handleGetRefactorReport,
   handleGetCallGraph,
   handleGetSignatures,
@@ -45,7 +61,10 @@ import {
   handleGetLeafFunctions,
   handleGetCriticalHubs,
   handleCheckSpecDrift,
+  handleSuggestInsertionPoints,
 } from './mcp.js';
+import { VectorIndex } from '../../core/analyzer/vector-index.js';
+import { EmbeddingService } from '../../core/analyzer/embedding-service.js';
 import type { SerializedCallGraph, FunctionNode } from '../../core/analyzer/call-graph.js';
 import type { MappingArtifact } from '../../core/generator/mapping-generator.js';
 import type { FileSignatureMap } from '../../core/analyzer/signature-extractor.js';
@@ -1161,5 +1180,337 @@ describe('handleCheckSpecDrift', () => {
     const result = await handleCheckSpecDrift(driftDir, 'auto', [], [], 'warning', 2) as DriftResult;
     // totalChangedFiles should reflect the original 5, not the truncated 2
     expect(result.totalChangedFiles).toBe(5);
+  });
+});
+
+// ============================================================================
+// handleSuggestInsertionPoints
+// ============================================================================
+
+/** Minimal SearchResult shape returned by VectorIndex.search */
+function makeFakeResult(
+  name: string,
+  distance: number,
+  opts: { fanIn?: number; fanOut?: number; isHub?: boolean; isEntryPoint?: boolean } = {}
+) {
+  return {
+    score: distance,
+    record: {
+      id: `id-${name}`,
+      name,
+      filePath: `src/${name}.ts`,
+      className: '',
+      language: 'TypeScript',
+      signature: `function ${name}(): void`,
+      docstring: '',
+      fanIn: opts.fanIn ?? 1,
+      fanOut: opts.fanOut ?? 1,
+      isHub: opts.isHub ?? false,
+      isEntryPoint: opts.isEntryPoint ?? false,
+      text: name,
+    },
+  };
+}
+
+describe('handleSuggestInsertionPoints', () => {
+  let testDir: string;
+  const mockEmbedSvc = { embed: vi.fn() };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `mcp-suggest-${Date.now()}`);
+    await mkdir(testDir, { recursive: true });
+    vi.mocked(VectorIndex.exists).mockReturnValue(true);
+    vi.mocked(EmbeddingService.fromEnv).mockReturnValue(mockEmbedSvc as never);
+    vi.mocked(VectorIndex.search).mockResolvedValue([]);
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('throws when directory does not exist', async () => {
+    await expect(handleSuggestInsertionPoints('/nonexistent/suggest-test-00000', 'add retry'))
+      .rejects.toThrow('not found');
+  });
+
+  it('returns error when no vector index exists', async () => {
+    vi.mocked(VectorIndex.exists).mockReturnValue(false);
+    const result = await handleSuggestInsertionPoints(testDir, 'add retry') as { error: string };
+    expect(result.error).toMatch(/spec-gen analyze --embed/);
+  });
+
+  it('returns error when embedding config not found', async () => {
+    vi.mocked(EmbeddingService.fromEnv).mockImplementation(() => { throw new Error('no env'); });
+    vi.mocked(readSpecGenConfig).mockResolvedValue(null);
+    const result = await handleSuggestInsertionPoints(testDir, 'add retry') as { error: string };
+    expect(result.error).toMatch(/embedding/i);
+  });
+
+  it('returns empty candidates when search returns no results', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([]);
+    const result = await handleSuggestInsertionPoints(testDir, 'add retry') as { count: number; candidates: unknown[] };
+    expect(result.count).toBe(0);
+    expect(result.candidates).toHaveLength(0);
+  });
+
+  it('classifies entry_point role and extend_entry_point strategy', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('startCrawler', 0.1, { isEntryPoint: true, fanIn: 0, fanOut: 3 }),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'start crawling') as { candidates: Array<{ role: string; insertionStrategy: string }> };
+    expect(result.candidates[0].role).toBe('entry_point');
+    expect(result.candidates[0].insertionStrategy).toBe('extend_entry_point');
+  });
+
+  it('classifies orchestrator role and add_orchestration_step strategy', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('processRequest', 0.15, { fanOut: 8 }),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'process incoming request') as { candidates: Array<{ role: string }> };
+    expect(result.candidates[0].role).toBe('orchestrator');
+  });
+
+  it('classifies hub role for high fanIn functions', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('logger', 0.2, { isHub: true, fanIn: 50 }),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'add logging') as { candidates: Array<{ role: string }> };
+    expect(result.candidates[0].role).toBe('hub');
+  });
+
+  it('re-ranks by composite score — entry_point beats internal even with worse semantic distance', async () => {
+    // internal: distance 0.05 (very close semantically), but low structural value
+    // entry_point: distance 0.25 (farther), but high structural value
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('internalHelper', 0.05, { fanIn: 2, fanOut: 1, isEntryPoint: false }),
+      makeFakeResult('startFeature', 0.25, { fanIn: 0, fanOut: 2, isEntryPoint: true }),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'start new feature') as { candidates: Array<{ name: string }> };
+    // composite(internalHelper) = 0.95*0.6 + 0.4*0.4 = 0.57+0.16 = 0.73
+    // composite(startFeature) = 0.75*0.6 + 1.0*0.4 = 0.45+0.40 = 0.85 → ranked first
+    expect(result.candidates[0].name).toBe('startFeature');
+    expect(result.candidates[1].name).toBe('internalHelper');
+  });
+
+  it('respects limit parameter', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('fn1', 0.1),
+      makeFakeResult('fn2', 0.15),
+      makeFakeResult('fn3', 0.2),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'feature', 2) as { candidates: unknown[] };
+    expect(result.candidates).toHaveLength(2);
+  });
+
+  it('assigns sequential rank starting at 1', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('fnA', 0.1),
+      makeFakeResult('fnB', 0.2),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'feature') as { candidates: Array<{ rank: number }> };
+    expect(result.candidates[0].rank).toBe(1);
+    expect(result.candidates[1].rank).toBe(2);
+  });
+
+  it('includes nextSteps with top candidate name when results found', async () => {
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeFakeResult('fetchPage', 0.1, { isEntryPoint: true }),
+    ]);
+    const result = await handleSuggestInsertionPoints(testDir, 'add retry for HTTP') as { nextSteps: string[] };
+    expect(result.nextSteps.some(s => s.includes('fetchPage'))).toBe(true);
+  });
+
+  it('falls back to fromConfig when fromEnv throws', async () => {
+    vi.mocked(EmbeddingService.fromEnv).mockImplementation(() => { throw new Error('no env'); });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(readSpecGenConfig).mockResolvedValue({ embedding: { baseUrl: 'http://x', model: 'm' } } as any);
+    vi.mocked(EmbeddingService.fromConfig).mockReturnValue(mockEmbedSvc as never);
+    vi.mocked(VectorIndex.search).mockResolvedValue([makeFakeResult('fn', 0.1)]);
+    const result = await handleSuggestInsertionPoints(testDir, 'feature') as { count: number };
+    expect(result.count).toBe(1);
+    expect(EmbeddingService.fromConfig).toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// handleGetArchitectureOverview
+// ============================================================================
+
+describe('handleGetArchitectureOverview', () => {
+  let testDir: string;
+
+  // Minimal dep-graph fixture
+  const makeDepGraph = (overrides?: object) => ({
+    nodes: [
+      { file: { path: '/abs/src/cli/index.ts' }, metrics: { inDegree: 0, outDegree: 3 } },
+      { file: { path: '/abs/src/core/foo.ts' }, metrics: { inDegree: 2, outDegree: 1 } },
+    ],
+    edges: [
+      { source: '/abs/src/cli/index.ts', target: '/abs/src/core/foo.ts' },
+    ],
+    clusters: [
+      { id: 'cl-cli', name: 'CLI', files: ['/abs/src/cli/index.ts'] },
+      { id: 'cl-core', name: 'Core', files: ['/abs/src/core/foo.ts'] },
+    ],
+    cycles: [],
+    statistics: { nodeCount: 2, edgeCount: 1 },
+    ...overrides,
+  });
+
+  // Minimal llm-context fixture (with call graph)
+  const makeCtx = (overrides?: object) => ({
+    callGraph: {
+      entryPoints: [{ name: 'main', filePath: 'src/cli/index.ts', language: 'TypeScript', fanIn: 0, fanOut: 3 }],
+      hubFunctions: [{ name: 'process', filePath: 'src/core/foo.ts', language: 'TypeScript', fanIn: 5, fanOut: 2 }],
+      layerViolations: [],
+    },
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    testDir = await mkdtemp(join(tmpdir(), 'mcp-arch-test-'));
+    await mkdir(join(testDir, '.spec-gen', 'analysis'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('throws McpError when directory does not exist', async () => {
+    await expect(handleGetArchitectureOverview('/nonexistent/path')).rejects.toThrow();
+  });
+
+  it('returns error when no analysis files found', async () => {
+    const result = await handleGetArchitectureOverview(testDir) as { error: string };
+    expect(result.error).toMatch(/No analysis found/);
+  });
+
+  it('returns summary stats from dep-graph', async () => {
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'dependency-graph.json'),
+      JSON.stringify(makeDepGraph()),
+      'utf-8'
+    );
+    const result = await handleGetArchitectureOverview(testDir) as {
+      summary: { totalFiles: number; totalClusters: number; totalEdges: number };
+    };
+    expect(result.summary.totalFiles).toBe(2);
+    expect(result.summary.totalClusters).toBe(2);
+    expect(result.summary.totalEdges).toBe(1);
+  });
+
+  it('identifies entry_layer role for cluster containing entry points', async () => {
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'dependency-graph.json'),
+      JSON.stringify(makeDepGraph()),
+      'utf-8'
+    );
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'llm-context.json'),
+      JSON.stringify(makeCtx()),
+      'utf-8'
+    );
+    // absDir for testDir, so toRel strips testDir prefix from absolute paths.
+    // But our fixture uses '/abs/...' which is not under testDir →
+    // hub/entry lookup is done via relative paths from llm-context,
+    // while cluster files are absolute '/abs/...' which won't match testDir prefix.
+    // Use testDir-based absolute paths to exercise the path normalization.
+    const depGraph = makeDepGraph({
+      nodes: [
+        { file: { path: join(testDir, 'src/cli/index.ts') }, metrics: { inDegree: 0, outDegree: 3 } },
+        { file: { path: join(testDir, 'src/core/foo.ts') }, metrics: { inDegree: 2, outDegree: 1 } },
+      ],
+      edges: [{ source: join(testDir, 'src/cli/index.ts'), target: join(testDir, 'src/core/foo.ts') }],
+      clusters: [
+        { id: 'cl-cli', name: 'CLI', files: [join(testDir, 'src/cli/index.ts')] },
+        { id: 'cl-core', name: 'Core', files: [join(testDir, 'src/core/foo.ts')] },
+      ],
+    });
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'dependency-graph.json'),
+      JSON.stringify(depGraph),
+      'utf-8'
+    );
+    const ctx = makeCtx({
+      callGraph: {
+        entryPoints: [{ name: 'main', filePath: 'src/cli/index.ts', language: 'TypeScript', fanIn: 0, fanOut: 3 }],
+        hubFunctions: [],
+        layerViolations: [],
+      },
+    });
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'llm-context.json'),
+      JSON.stringify(ctx),
+      'utf-8'
+    );
+    const result = await handleGetArchitectureOverview(testDir) as {
+      clusters: Array<{ id: string; role: string }>;
+    };
+    const cli = result.clusters.find(c => c.id === 'cl-cli');
+    expect(cli?.role).toBe('entry_layer');
+  });
+
+  it('builds inter-cluster dependencies', async () => {
+    const depGraph = makeDepGraph({
+      nodes: [
+        { file: { path: join(testDir, 'src/cli/index.ts') }, metrics: { inDegree: 0, outDegree: 1 } },
+        { file: { path: join(testDir, 'src/core/foo.ts') }, metrics: { inDegree: 1, outDegree: 0 } },
+      ],
+      edges: [{ source: join(testDir, 'src/cli/index.ts'), target: join(testDir, 'src/core/foo.ts') }],
+      clusters: [
+        { id: 'cl-cli', name: 'CLI', files: [join(testDir, 'src/cli/index.ts')] },
+        { id: 'cl-core', name: 'Core', files: [join(testDir, 'src/core/foo.ts')] },
+      ],
+    });
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'dependency-graph.json'),
+      JSON.stringify(depGraph),
+      'utf-8'
+    );
+    const result = await handleGetArchitectureOverview(testDir) as {
+      clusters: Array<{ id: string; dependsOn: string[] }>;
+    };
+    const cli = result.clusters.find(c => c.id === 'cl-cli');
+    expect(cli?.dependsOn).toContain('cl-core');
+    const core = result.clusters.find(c => c.id === 'cl-core');
+    expect(core?.dependsOn).toHaveLength(0);
+  });
+
+  it('works with only llm-context (no dep-graph)', async () => {
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'llm-context.json'),
+      JSON.stringify(makeCtx()),
+      'utf-8'
+    );
+    const result = await handleGetArchitectureOverview(testDir) as {
+      summary: { totalFiles: number; totalClusters: number };
+      globalEntryPoints: Array<{ name: string }>;
+    };
+    expect(result.summary.totalFiles).toBe(0);
+    expect(result.summary.totalClusters).toBe(0);
+    expect(result.globalEntryPoints[0].name).toBe('main');
+  });
+
+  it('clusters sorted by fileCount descending', async () => {
+    const depGraph = makeDepGraph({
+      nodes: [],
+      edges: [],
+      clusters: [
+        { id: 'small', name: 'Small', files: ['a.ts'] },
+        { id: 'big', name: 'Big', files: ['b.ts', 'c.ts', 'd.ts'] },
+      ],
+      statistics: { nodeCount: 4, edgeCount: 0 },
+    });
+    await writeFile(
+      join(testDir, '.spec-gen', 'analysis', 'dependency-graph.json'),
+      JSON.stringify(depGraph),
+      'utf-8'
+    );
+    const result = await handleGetArchitectureOverview(testDir) as {
+      clusters: Array<{ id: string }>;
+    };
+    expect(result.clusters[0].id).toBe('big');
+    expect(result.clusters[1].id).toBe('small');
   });
 });

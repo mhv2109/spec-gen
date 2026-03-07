@@ -1,0 +1,123 @@
+schema: spec-driven
+spec-gen:
+  version: 1.0.0
+  generatedAt: 2026-03-01T15:52:43.675Z
+  domains:
+    - analyzer
+    - generator
+    - drift
+    - verifier
+    - auth
+    - project
+    - task
+    - openspec
+    - cli
+    - llm
+  confidence: 0.98
+context: |-
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # User-provided context (preserved)
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, auth, task, project, llm, spec, cli, dependency
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, auth, task, project, llm, spec, dependency, cli
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec, config
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, spec, cli, verifier, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, drift, generator, openspec, cli, verifier
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, drift, generator, verifier, openspec, cli
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec, config
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, drift, generator, verifier, cli, openspec, config
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, cli, openspec, config
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, drift, generator, verifier, cli, openspec
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, drift, generator, verifier, cli, openspec, config
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, auth, task, project, llm, openspec, dependency, cli
+
+  # Auto-detected by spec-gen
+  Tech stack: TypeScript, Vitest
+  Architecture: Layered (routes → controllers → services → repositories)
+  Domains: analyzer, generator, drift, verifier, auth, project, task, openspec, cli, llm

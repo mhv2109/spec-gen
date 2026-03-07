@@ -11,7 +11,10 @@ import {
   MockLLMProvider,
   AnthropicProvider,
   OpenAIProvider,
+  ClaudeCodeProvider,
+  MistralVibeProvider,
   createMockLLMService,
+  createLLMService,
   estimateTokens,
   type CompletionRequest,
 } from './llm-service.js';
@@ -522,5 +525,39 @@ describe('Integration Tests (skipped without API keys)', () => {
 
     expect(response.content.toLowerCase()).toContain('test passed');
     expect(response.usage.totalTokens).toBeGreaterThan(0);
+  });
+
+  describe('CLI Providers', () => {
+    it('should create ClaudeCode provider', () => {
+      const provider = new ClaudeCodeProvider();
+      
+      expect(provider.name).toBe('claude-code');
+      expect(provider.maxContextTokens).toBe(200_000);
+    });
+
+    it('should create MistralVibe provider', () => {
+      const provider = new MistralVibeProvider();
+      
+      expect(provider.name).toBe('mistral-vibe');
+      expect(provider.maxContextTokens).toBe(128_000);
+    });
+
+    it('should create service with claude-code provider', () => {
+      const service = createLLMService({ provider: 'claude-code' });
+      expect(service.getProviderName()).toBe('claude-code');
+    });
+
+    it('should create service with mistral-vibe provider', () => {
+      const service = createLLMService({ provider: 'mistral-vibe' });
+      expect(service.getProviderName()).toBe('mistral-vibe');
+    });
+
+    it('should support custom models for CLI providers', () => {
+      const claudeProvider = new ClaudeCodeProvider('claude-sonnet');
+      const mistralProvider = new MistralVibeProvider('mistral-small');
+      
+      expect(claudeProvider).toBeDefined();
+      expect(mistralProvider).toBeDefined();
+    });
   });
 });

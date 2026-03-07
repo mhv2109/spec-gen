@@ -229,7 +229,6 @@ describe('AnalysisArtifactGenerator', () => {
         outputDir,
       });
 
-      // Should detect layered architecture based on directory structure
       expect(['layered', 'modular', 'microservices', 'monolith', 'unknown']).toContain(
         artifacts.repoStructure.architecture.pattern
       );
@@ -494,7 +493,6 @@ describe('AnalysisArtifactGenerator', () => {
         outputDir,
       });
 
-      // Should contain node definitions
       expect(artifacts.dependencyDiagram).toContain('["');
     });
   });
@@ -552,13 +550,13 @@ describe('AnalysisArtifactGenerator', () => {
         outputDir,
       });
 
-      expect(artifacts.llmContext.phase1_survey.estimatedTokens).toBeGreaterThan(0);
+      // FIX: renommé estimatedTokens → totalTokens (cohérent avec phase2/phase3)
+      expect(artifacts.llmContext.phase1_survey.totalTokens).toBeGreaterThan(0);
     });
   });
 
   describe('File Saving', () => {
     it('should save all artifacts to disk', async () => {
-      // Create actual files for reading
       const srcDir = join(tempDir, 'src');
       await mkdir(srcDir, { recursive: true });
       await writeFile(join(srcDir, 'index.ts'), 'export const main = () => {};');
@@ -579,7 +577,6 @@ describe('AnalysisArtifactGenerator', () => {
         outputDir,
       });
 
-      // Check files exist
       await expect(access(join(outputDir, 'repo-structure.json'))).resolves.not.toThrow();
       await expect(access(join(outputDir, 'SUMMARY.md'))).resolves.not.toThrow();
       await expect(access(join(outputDir, 'dependencies.mermaid'))).resolves.not.toThrow();
@@ -607,7 +604,6 @@ describe('AnalysisArtifactGenerator', () => {
         outputDir,
       });
 
-      // Verify JSON is parseable
       const repoStructure = JSON.parse(await readFile(join(outputDir, 'repo-structure.json'), 'utf-8'));
       expect(repoStructure.projectName).toBe('test-project');
 
@@ -715,7 +711,6 @@ describe('AnalysisArtifactGenerator', () => {
         maxDeepAnalysisFiles: 10,
       });
 
-      // Files array is capped (though content reading may fail for mock files)
       expect(artifacts.llmContext.phase2_deep.files.length).toBeLessThanOrEqual(10);
     });
 
@@ -731,7 +726,6 @@ describe('AnalysisArtifactGenerator', () => {
       });
       const depGraph = createMockDepGraph();
 
-      // Should not throw
       const artifacts = await generateArtifacts(repoMap, depGraph, {
         rootDir: tempDir,
         outputDir,

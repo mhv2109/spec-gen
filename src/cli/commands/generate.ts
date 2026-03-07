@@ -35,6 +35,7 @@ import { ADRGenerator } from '../../core/generator/adr-generator.js';
 import type { RepoStructure, LLMContext } from '../../core/analyzer/artifact-generator.js';
 import type { DependencyGraphResult } from '../../core/analyzer/dependency-graph.js';
 import { MappingGenerator } from '../../core/generator/mapping-generator.js';
+import { createProgress } from '../../utils/progress.js';
 
 // ============================================================================
 // TYPES
@@ -416,24 +417,25 @@ Each spec.md follows OpenSpec conventions:
       const openaiCompatKey = process.env.OPENAI_COMPAT_API_KEY;
       const geminiKey = process.env.GEMINI_API_KEY;
 
-      if (!anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
+      // Resolve provider early so we can skip the API key check for claude-code
+      const envDetectedProvider = anthropicKey ? 'anthropic'
+        : geminiKey ? 'gemini'
+        : openaiCompatKey ? 'openai-compat'
+        : 'openai';
+      const rootConfig = specGenConfig as unknown as Record<string, string>;
+      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'gemini' | 'claude-code' | 'mistral-vibe';
+
+      if (effectiveProvider !== 'claude-code' && effectiveProvider !== 'mistral-vibe' && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
         logger.error('No LLM API key found.');
         logger.discovery('Set one of the following environment variables:');
         logger.discovery('  ANTHROPIC_API_KEY    → https://console.anthropic.com/');
         logger.discovery('  OPENAI_API_KEY       → https://platform.openai.com/');
         logger.discovery('  GEMINI_API_KEY       → https://aistudio.google.com/');
         logger.discovery('  OPENAI_COMPAT_API_KEY + OPENAI_COMPAT_BASE_URL  → Mistral, Groq, Ollama...');
+        logger.discovery('  Or set provider to "claude-code" or "mistral-vibe" to use local CLI tools (no API key needed).');
         process.exitCode = 1;
         return;
       }
-
-      // Resolve provider with priority: config > env var auto-detection
-      const envDetectedProvider = anthropicKey ? 'anthropic'
-        : geminiKey ? 'gemini'
-        : openaiCompatKey ? 'openai-compat'
-        : 'openai';
-      const rootConfig = specGenConfig as unknown as Record<string, string>;
-      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'gemini';
 
       // Resolve model with priority: CLI flag > config > provider default
       const defaultModels: Record<string, string> = {
@@ -441,6 +443,8 @@ Each spec.md follows OpenSpec conventions:
         gemini: 'gemini-2.0-flash',
         'openai-compat': 'mistral-large-latest',
         openai: 'gpt-4o',
+        'claude-code': 'claude-code',
+        'mistral-vibe': 'mistral-vibe',
       };
       const effectiveModel = opts.model || specGenConfig.generation.model || defaultModels[effectiveProvider];
 
@@ -554,21 +558,23 @@ Each spec.md follows OpenSpec conventions:
       }
 
       // Run generation pipeline
+      const progress = createProgress();
+      progress.start('Generating specifications...');
+
       const pipeline = new SpecGenerationPipeline(llm, {
         outputDir: join(rootPath, '.spec-gen', 'generation'),
         rootPath,
         saveIntermediate: true,
         generateADRs: opts.adr || opts.adrOnly,
+        progress,
       });
-
-      logger.analysis('Running LLM generation pipeline...');
-      logger.blank();
 
       let pipelineResult: PipelineResult;
       try {
         pipelineResult = await pipeline.run(repoStructure, llmContext, depGraph);
+        progress.succeed('Pipeline completed');
       } catch (error) {
-        logger.error(`Pipeline failed: ${(error as Error).message}`);
+        progress.fail(`Pipeline failed: ${(error as Error).message}`);
 
         // Save logs on failure
         try {
@@ -671,7 +677,25 @@ Each spec.md follows OpenSpec conventions:
       // Generate requirement→function mapping artifact if dep graph is available
       if (depGraph) {
         try {
-          const mapper = new MappingGenerator(rootPath, specGenConfig.openspecPath);
+          // Wire semantic search if a vector index exists for this project
+          let semanticSearch: import('./../../core/generator/mapping-generator.js').SemanticSearchFn | undefined;
+          const analysisDir = join(rootPath, '.spec-gen', 'analysis');
+          const { VectorIndex } = await import('../../core/analyzer/vector-index.js');
+          if (VectorIndex.exists(analysisDir)) {
+            const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
+            let embedSvc: InstanceType<typeof EmbeddingService> | undefined;
+            try {
+              embedSvc = EmbeddingService.fromEnv();
+            } catch {
+              const svc = EmbeddingService.fromConfig(specGenConfig);
+              if (svc) embedSvc = svc;
+            }
+            if (embedSvc) {
+              const svc = embedSvc;
+              semanticSearch = (query, limit) => VectorIndex.search(analysisDir, query, svc, { limit });
+            }
+          }
+          const mapper = new MappingGenerator(rootPath, specGenConfig.openspecPath, semanticSearch);
           const mapping = await mapper.generate(pipelineResult, depGraph);
           logger.success(
             `Requirement mapping: ${mapping.stats.mappedRequirements}/${mapping.stats.totalRequirements} requirements mapped, ${mapping.stats.orphanCount} orphan functions → .spec-gen/analysis/mapping.json`

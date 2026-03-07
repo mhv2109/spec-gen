@@ -1,0 +1,80 @@
+/**
+ * Stage 2: Entity Extraction
+ *
+ * Extracts core data models/entities from schema files.
+ */
+
+import logger from '../../../utils/logger.js';
+import { PROMPTS } from '../prompts.js';
+import type { ExtractedEntity, StageResult, PipelineContext, ProjectSurveyResult } from '../../../types/pipeline.js';
+
+export async function runStage2(
+  pipeline: PipelineContext,
+  survey: ProjectSurveyResult,
+  schemaFiles: Array<{ path: string; content: string }>,
+  onFile?: (i: number, total: number, file: string) => void
+): Promise<StageResult<ExtractedEntity[]>> {
+  const startTime = Date.now();
+  const systemPrompt = PROMPTS.stage2_entities(survey.projectCategory, survey.frameworks);
+  const allEntities: ExtractedEntity[] = [];
+  const seenNames = new Set<string>();
+
+  for (const [idx, file] of schemaFiles.entries()) {
+    onFile?.(idx + 1, schemaFiles.length, file.path);
+    const chunks = pipeline.chunkContent(file.content, 8000);
+    const isLargeFile = chunks.length > 1;
+    const graphSection = pipeline.graphPromptFor(file.path, file.content);
+
+    if (isLargeFile && !graphSection) {
+      logger.warning(`Stage 2: ${file.path} too large (${chunks.length} parts) — entity spec may be incomplete`);
+    }
+
+    const entitiesFromFile: ExtractedEntity[] = [];
+
+    // Use graph-based prompt for large files when call graph is available
+    const fileChunks = graphSection ? [graphSection] : chunks;
+    for (let i = 0; i < fileChunks.length; i++) {
+      const chunkNote = !graphSection && isLargeFile ? ` (part ${i + 1}/${fileChunks.length})` : '';
+      const userPrompt = `Analyze this schema/model file and extract entities:\n\n=== ${file.path}${chunkNote} ===\n${fileChunks[i]}`;
+      try {
+        const result = await pipeline.llm.completeJSON<ExtractedEntity[]>({
+          systemPrompt,
+          userPrompt,
+          temperature: 0.3,
+          maxTokens: 4000,
+        });
+        if (Array.isArray(result)) {
+          for (const entity of result) {
+            if (!seenNames.has(entity.name)) {
+              seenNames.add(entity.name);
+              entity.location = file.path; // always use the actual file, not the LLM's guess
+              entitiesFromFile.push(entity);
+            }
+          }
+        }
+      } catch (error) {
+        logger.warning(`Stage 2: failed to analyze ${file.path}${chunkNote}: ${(error as Error).message}`);
+      }
+    }
+    if (isLargeFile && !graphSection) {
+      for (const entity of entitiesFromFile) {
+        entity.description = `[PARTIAL SPEC — file too large to fully analyze (${chunks.length} parts)] ${entity.description}`;
+      }
+    }
+    allEntities.push(...entitiesFromFile);
+  }
+
+  const stageResult: StageResult<ExtractedEntity[]> = {
+    stage: 'entities',
+    success: true,
+    data: allEntities,
+    tokens: pipeline.llm.getTokenUsage().totalTokens,
+    duration: Date.now() - startTime,
+  };
+
+  if (pipeline.options.saveIntermediate) {
+    await pipeline.saveResult('stage2-entities', stageResult);
+  }
+
+  return stageResult;
+}

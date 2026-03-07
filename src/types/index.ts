@@ -21,8 +21,18 @@ export interface SpecGenConfig {
   analysis: AnalysisConfig;
   generation: GenerationConfig;
   llm?: LLMConfig;
+  embedding?: EmbeddingConfig;
   createdAt: string;
   lastRun: string | null;
+}
+
+export interface EmbeddingConfig {
+  /** Base URL of the OpenAI-compatible embeddings endpoint */
+  baseUrl: string;
+  /** Embedding model name */
+  model: string;
+  /** API key — optional for local servers */
+  apiKey?: string;
 }
 
 export interface AnalysisConfig {
@@ -32,7 +42,7 @@ export interface AnalysisConfig {
 }
 
 export interface GenerationConfig {
-  provider?: 'anthropic' | 'openai' | 'openai-compat' | 'gemini';
+  provider?: 'anthropic' | 'openai' | 'openai-compat' | 'gemini' | 'claude-code' | 'mistral-vibe';
   model?: string;
   openaiCompatBaseUrl?: string;
   skipSslVerify?: boolean;

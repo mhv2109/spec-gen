@@ -12,6 +12,7 @@ import { logger } from '../../utils/logger.js';
 import type { AnalyzeOptions } from '../../types/index.js';
 import { readSpecGenConfig } from '../../core/services/config-manager.js';
 import { RepositoryMapper, type RepositoryMap } from '../../core/analyzer/repository-mapper.js';
+import type { CloneGroup, CloneInstance } from '../../core/analyzer/duplicate-detector.js';
 import {
   DependencyGraphBuilder,
   type DependencyGraphResult,
@@ -20,6 +21,10 @@ import {
   AnalysisArtifactGenerator,
   type AnalysisArtifacts,
 } from '../../core/analyzer/artifact-generator.js';
+import {
+  buildArchitectureOverview,
+  writeArchitectureMd,
+} from '../../core/analyzer/architecture-writer.js';
 
 // ============================================================================
 // TYPES
@@ -27,6 +32,7 @@ import {
 
 interface ExtendedAnalyzeOptions extends AnalyzeOptions {
   force?: boolean;
+  embed?: boolean;
 }
 
 interface AnalysisResult {
@@ -211,6 +217,11 @@ export const analyzeCommand = new Command('analyze')
     'Force re-analysis even if recent analysis exists',
     false
   )
+  .option(
+    '--embed',
+    'Build a semantic vector index after analysis (requires EMBED_BASE_URL + EMBED_MODEL)',
+    false
+  )
   .addHelpText(
     'after',
     `
@@ -225,6 +236,7 @@ Examples:
   $ spec-gen analyze --output ./my-analysis
                                      Custom output location
   $ spec-gen analyze --force         Force re-analysis
+  $ spec-gen analyze --embed         Also build semantic vector index
 
 Output files:
   .spec-gen/analysis/
@@ -249,6 +261,7 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
       include: options.include ?? [],
       exclude: options.exclude ?? [],
       force: options.force ?? false,
+      embed: options.embed ?? false,
       quiet: false,
       verbose: false,
       noColor: false,
@@ -386,6 +399,7 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
             s.highFanOut    > 0 ? `${s.highFanOut} god function`   : null,
             s.srpViolations > 0 ? `${s.srpViolations} SRP`        : null,
             s.cyclesDetected> 0 ? `${s.cyclesDetected} cycle`     : null,
+            s.inCloneGroup  > 0 ? `${s.inCloneGroup} duplicate`   : null,
           ].filter(Boolean).join('  ·  ');
 
           const issueLabel: Record<string, string> = {
@@ -394,6 +408,7 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
             high_fan_out:      `god   fanOut`,
             multi_requirement: 'SRP',
             in_cycle:          'cycle',
+            in_clone_group:    'clone',
           };
 
           console.log(`  Refactoring Candidates  (${s.withIssues}/${s.totalFunctions} functions):`);
@@ -436,6 +451,55 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
         }
       } catch { /* refactor-priorities.json not yet generated */ }
 
+      // Duplicate code detection
+      try {
+        const { readFile: rf } = await import('node:fs/promises');
+        const dup = JSON.parse(await rf(join(opts.output, 'duplicates.json'), 'utf-8'));
+        if (dup?.stats?.cloneGroupCount > 0) {
+          const s = dup.stats;
+          const severity = s.duplicationRatio >= 0.2 ? '⚠'
+                           : s.duplicationRatio >= 0.1 ? 'ℹ'
+                           : ' ';
+          console.log(`  ${severity} Code Duplication  (${s.duplicatedFunctions}/${s.totalFunctions} functions):`);
+          console.log(`    ├─ Ratio: ${(s.duplicationRatio * 100).toFixed(1)}%`);
+          console.log(`    ├─ Clone groups: ${s.cloneGroupCount}`);
+          
+          // Show top clone types
+          const typeCounts: Record<string, number> = { exact: 0, structural: 0, near: 0 };
+          for (const group of dup.cloneGroups) {
+            typeCounts[group.type]++;
+          }
+          const typeLabels = Object.entries(typeCounts)
+            .filter(([_, count]) => count > 0)
+            .map(([type, count]) => `${count} ${type}`)
+            .join('  ·  ');
+          
+          console.log(`    └─ Types: ${typeLabels}`);
+          
+          // Show top 5 clone groups
+          if (dup.cloneGroups.length > 0) {
+            console.log('');
+            console.log('  Top 5 Clone Groups:');
+            const topGroups = dup.cloneGroups
+              .sort((a: CloneGroup, b: CloneGroup) => b.instances.length - a.instances.length)
+              .slice(0, 5);
+            
+            for (const group of topGroups) {
+              const files = group.instances.map((i: CloneInstance) => {
+                const fileParts = i.file.split('/');
+                return `${fileParts[fileParts.length - 2]}/${fileParts[fileParts.length - 1]}:${i.functionName}`;
+              }).join('  ');
+              
+              console.log(`    ${group.type.padEnd(10)} (${group.instances.length}x, ${group.lineCount} lines): ${files}`);
+            }
+          }
+          
+          console.log('');
+          console.log(`    → ${opts.output}duplicates.json`);
+          console.log('');
+        }
+      } catch { /* duplicates.json not yet generated */ }
+
       // Detected domains
       if (artifacts.repoStructure.domains.length > 0) {
         console.log('  Detected Domains:');
@@ -451,14 +515,70 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
         console.log('');
       }
 
+      // Generate ARCHITECTURE.md from cached analysis (no LLM)
+      let architectureMdWritten = false;
+      try {
+        const ctx = artifacts.llmContext ?? null;
+        const overview = buildArchitectureOverview(depGraph, ctx, rootPath);
+        await writeArchitectureMd(rootPath, overview);
+        architectureMdWritten = true;
+      } catch {
+        // non-fatal — analysis still succeeded
+      }
+
       // Files generated
       console.log('  Output Files:');
       console.log(`    ├─ ${opts.output}repo-structure.json`);
       console.log(`    ├─ ${opts.output}dependency-graph.json`);
       console.log(`    ├─ ${opts.output}llm-context.json`);
       console.log(`    ├─ ${opts.output}dependencies.mermaid`);
-      console.log(`    └─ ${opts.output}SUMMARY.md`);
+      if (architectureMdWritten) {
+        console.log(`    ├─ ${opts.output}SUMMARY.md`);
+        console.log('    └─ ARCHITECTURE.md');
+      } else {
+        console.log(`    └─ ${opts.output}SUMMARY.md`);
+      }
       console.log('');
+
+      // ========================================================================
+      // PHASE 5 (optional): BUILD VECTOR INDEX
+      // ========================================================================
+      if (opts.embed) {
+        console.log('  Building semantic vector index...');
+        try {
+          const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
+          const { VectorIndex } = await import('../../core/analyzer/vector-index.js');
+
+          // Resolve embedding config: env vars take priority, then .spec-gen/config.json
+          let embedSvc: InstanceType<typeof EmbeddingService>;
+          try {
+            embedSvc = EmbeddingService.fromEnv();
+          } catch {
+            const cfg = await readSpecGenConfig(rootPath);
+            if (!cfg) throw new Error('No embedding config found. Set EMBED_BASE_URL and EMBED_MODEL, or add "embedding" to .spec-gen/config.json');
+            const svcFromConfig = EmbeddingService.fromConfig(cfg);
+            if (!svcFromConfig) throw new Error('No embedding config found. Set EMBED_BASE_URL and EMBED_MODEL, or add "embedding" to .spec-gen/config.json');
+            embedSvc = svcFromConfig;
+          }
+
+          const cg = result.artifacts.llmContext.callGraph;
+          const sigs = result.artifacts.llmContext.signatures ?? [];
+
+          if (!cg || cg.nodes.length === 0) {
+            console.log('    ⚠ No call graph data — vector index skipped');
+          } else {
+            const hubIds = new Set(cg.hubFunctions.map(f => f.id));
+            const entryIds = new Set(cg.entryPoints.map(f => f.id));
+
+            await VectorIndex.build(outputPath, cg.nodes, sigs, hubIds, entryIds, embedSvc);
+            console.log(`    ✓ Vector index built (${cg.nodes.length} functions)`);
+            console.log(`    → ${opts.output}vector-index/`);
+          }
+        } catch (embedErr) {
+          console.log(`    ✗ Vector index failed: ${(embedErr as Error).message}`);
+        }
+        console.log('');
+      }
 
       // Duration
       const totalDuration = Date.now() - startTime;

@@ -834,7 +834,8 @@ export class AnalysisArtifactGenerator {
           tokens: 2000, // Estimate
         },
       ],
-      estimatedTokens: 2000,
+      // FIX 1: estimatedTokens → totalTokens pour cohérence avec phase2/phase3
+      totalTokens: 2000,
     };
 
     // Phase 2: Deep analysis (top files by importance, excluding test files)
@@ -860,7 +861,8 @@ export class AnalysisArtifactGenerator {
     const phase2: LLMContextPhase = {
       purpose: 'Core entity and logic extraction',
       files: phase2Files,
-      totalTokens: phase2Files.reduce((sum, f) => sum + f.tokens, 0),
+      // FIX 2: tokens peut être undefined → utiliser ?? 0
+      totalTokens: phase2Files.reduce((sum, f) => sum + (f.tokens ?? 0), 0),
     };
 
     // Phase 3: Validation (random leaf nodes not in phase 2, excluding test files)
@@ -871,8 +873,12 @@ export class AnalysisArtifactGenerator {
       .filter(f => !phase2Paths.has(f.path))
       .filter(f => !isTestFile(f.path));
 
-    // Shuffle and take random samples
-    const shuffled = leafFiles.sort(() => Math.random() - 0.5);
+    // FIX 3: Fisher-Yates shuffle (sort(() => Math.random()) est biaisé + mute le tableau original)
+    const shuffled = [...leafFiles];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     const validationFiles = shuffled.slice(0, this.options.maxValidationFiles);
 
     const phase3Files: LLMContextPhase['files'] = [];
@@ -893,13 +899,16 @@ export class AnalysisArtifactGenerator {
     const phase3: LLMContextPhase = {
       purpose: 'Verification samples',
       files: phase3Files,
-      totalTokens: phase3Files.reduce((sum, f) => sum + f.tokens, 0),
+      totalTokens: phase3Files.reduce((sum, f) => sum + (f.tokens ?? 0), 0),
     };
 
     // Signature extraction + call graph for ALL analyzed files
     // Read each file once and reuse the content for both operations.
+    // All dynamic imports grouped here; CALL_GRAPH_LANGS hoisted out of the loop.
     const { extractSignatures, detectLanguage } = await import('./signature-extractor.js');
     const { CallGraphBuilder, serializeCallGraph } = await import('./call-graph.js');
+    const { detectDuplicates } = await import('./duplicate-detector.js');
+    const { analyzeForRefactoring } = await import('./refactor-analyzer.js');
 
     const CALL_GRAPH_LANGS = new Set(['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust', 'Ruby', 'Java']);
     const signatures: import('./signature-extractor.js').FileSignatureMap[] = [];
@@ -910,8 +919,7 @@ export class AnalysisArtifactGenerator {
         const content = await readFile(file.absolutePath, 'utf-8');
         const isTest = isTestFile(file.path);
 
-        // Signatures: exclude test files — they pollute the context shown to Stage 1
-        // and cause the LLM to suggest test files as schema/service/api candidates.
+        // Signatures: exclude test files
         if (!isTest) {
           const map = extractSignatures(file.path, content);
           if (map.entries.length > 0) {
@@ -919,7 +927,7 @@ export class AnalysisArtifactGenerator {
           }
         }
 
-        // Call graph — all languages supported by tree-sitter extractors, exclude test files
+        // Call graph — all supported languages, exclude test files
         const lang = detectLanguage(file.path);
         if (!isTest && CALL_GRAPH_LANGS.has(lang)) {
           callGraphFiles.push({ path: file.path, content, language: lang });
@@ -929,31 +937,43 @@ export class AnalysisArtifactGenerator {
       }
     }
 
-    // Build call graph from collected files
+    // Build call graph
     const builder = new CallGraphBuilder();
     const callGraphResult = await builder.build(callGraphFiles);
     const callGraph = serializeCallGraph(callGraphResult);
 
-    // Refactoring priorities (structural — no requirements yet, enriched after generate)
-    const { analyzeForRefactoring } = await import('./refactor-analyzer.js');
+    // Duplicate detection — static analysis, no LLM (Types 1-2-3)
+    const duplicates = detectDuplicates(callGraphFiles, callGraphResult);
+
+    // Save duplicates
+    try {
+      await writeFile(
+        join(this.options.outputDir, 'duplicates.json'),
+        JSON.stringify(duplicates, null, 2)
+      );
+    } catch {
+      // non-fatal if output dir doesn't exist yet
+    }
+
+    // Refactoring priorities (structural — enriched after generate)
     let mappings: import('./refactor-analyzer.js').MappingEntry[] | undefined;
     try {
       const mappingRaw = await readFile(join(this.options.outputDir, 'mapping.json'), 'utf-8');
       const mappingJson = JSON.parse(mappingRaw);
       mappings = mappingJson.mappings as import('./refactor-analyzer.js').MappingEntry[];
     } catch {
-      // mapping.json not yet available (first analyze before generate) — that's fine
+      // mapping.json not yet available — that's fine
     }
-    const refactorReport = analyzeForRefactoring(callGraph, mappings);
+    const refactorReport = analyzeForRefactoring(callGraph, mappings, duplicates);
 
-    // Save refactor priorities immediately (not part of llm-context.json — too verbose for LLM)
+    // Save refactor priorities
     try {
       await writeFile(
         join(this.options.outputDir, 'refactor-priorities.json'),
         JSON.stringify(refactorReport, null, 2)
       );
     } catch {
-      // non-fatal if output dir doesn't exist yet
+      // non-fatal
     }
 
     return {
@@ -964,6 +984,7 @@ export class AnalysisArtifactGenerator {
       callGraph,
     };
   }
+
 }
 
 // ============================================================================

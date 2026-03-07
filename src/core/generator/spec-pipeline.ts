@@ -8,353 +8,56 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import logger from '../../utils/logger.js';
+import type { ProgressIndicator } from '../../utils/progress.js';
 import type { LLMService } from '../services/llm-service.js';
 import type { RepoStructure, LLMContext } from '../analyzer/artifact-generator.js';
+import { buildGraphPromptSection, getFileGodFunctions, extractSubgraph } from '../analyzer/subgraph-extractor.js';
+import { getSkeletonContent, detectLanguage, isSkeletonWorthIncluding } from '../analyzer/code-shaper.js';
 import type { DependencyGraphResult } from '../analyzer/dependency-graph.js';
-import { formatSignatureMaps, STAGE1_MAX_CHARS } from '../analyzer/signature-extractor.js';
 import { isTestFile } from '../analyzer/artifact-generator.js';
+import { runStage1 } from './stages/stage1-survey.js';
+import { runStage2 } from './stages/stage2-entities.js';
+import { runStage3 } from './stages/stage3-services.js';
+import { runStage4 } from './stages/stage4-api.js';
+import { runStage5 } from './stages/stage5-architecture.js';
+import { runStage6 } from './stages/stage6-adr.js';
+import { PROMPTS } from './prompts.js';
+import type {
+  ProjectSurveyResult,
+  ExtractedEntity,
+  ExtractedService,
+  ExtractedEndpoint,
+  ArchitectureSynthesis,
+  ArchitecturePattern,
+  EnrichedADR,
+  PipelineResult,
+  StageResult,
+  PipelineOptions,
+  PipelineContext,
+  ServiceSubSpec,
+} from '../../types/pipeline.js';
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
-/**
- * Project category from Stage 1
- */
-export type ProjectCategory =
-  | 'web-frontend'
-  | 'web-backend'
-  | 'api-service'
-  | 'cli-tool'
-  | 'library'
-  | 'mobile-app'
-  | 'desktop-app'
-  | 'data-pipeline'
-  | 'ml-service'
-  | 'monorepo'
-  | 'other';
-
-/**
- * Architecture pattern
- */
-export type ArchitecturePattern =
-  | 'layered'
-  | 'hexagonal'
-  | 'microservices'
-  | 'monolith'
-  | 'serverless'
-  | 'event-driven'
-  | 'mvc'
-  | 'other';
-
-/**
- * Stage 1 output: Project Survey
- */
-export interface ProjectSurveyResult {
-  projectCategory: ProjectCategory;
-  primaryLanguage: string;
-  frameworks: string[];
-  architecturePattern: ArchitecturePattern;
-  domainSummary: string;
-  suggestedDomains: string[];
-  confidence: number;
-  /** Files containing data models, types, entities — for Stage 2 entity extraction */
-  schemaFiles: string[];
-  /** Files containing business logic, services, processors — for Stage 3 service analysis */
-  serviceFiles: string[];
-  /** Files exposing public interfaces, HTTP routes, CLI commands — for Stage 4 API extraction */
-  apiFiles: string[];
-}
-
-/**
- * Entity property
- */
-export interface EntityProperty {
-  name: string;
-  type: string;
-  description?: string;
-  required?: boolean;
-}
-
-/**
- * Entity relationship
- */
-export interface EntityRelationship {
-  targetEntity: string;
-  type: 'one-to-one' | 'one-to-many' | 'many-to-many' | 'belongs-to';
-  description?: string;
-}
-
-/**
- * Scenario in Given/When/Then format
- */
-export interface Scenario {
-  name: string;
-  given: string;
-  when: string;
-  then: string;
-  and?: string[];
-}
-
-/**
- * Stage 2 output: Entity
- */
-export interface ExtractedEntity {
-  name: string;
-  description: string;
-  properties: EntityProperty[];
-  relationships: EntityRelationship[];
-  validations: string[];
-  scenarios: Scenario[];
-  location: string;
-}
-
-/**
- * Service operation
- */
-export interface ServiceOperation {
-  name: string;
-  description: string;
-  inputs?: string[];
-  outputs?: string[];
-  scenarios: Scenario[];
-  functionName?: string; // exact function/method name in source code, as reported by LLM
-}
-
-/**
- * Stage 3 output: Service
- */
-export interface ExtractedService {
-  name: string;
-  purpose: string;
-  operations: ServiceOperation[];
-  dependencies: string[];
-  sideEffects: string[];
-  domain: string;
-}
-
-/**
- * Stage 4 output: API Endpoint
- */
-export interface ExtractedEndpoint {
-  method: string;
-  path: string;
-  purpose: string;
-  authentication?: string;
-  requestSchema?: Record<string, unknown>;
-  responseSchema?: Record<string, unknown>;
-  scenarios: Scenario[];
-  relatedEntity?: string;
-}
-
-/**
- * Layer in the architecture
- */
-export interface ArchitectureLayer {
-  name: string;
-  purpose: string;
-  components: string[];
-}
-
-/**
- * Stage 5 output: Architecture Synthesis
- */
-export interface ArchitectureSynthesis {
-  systemPurpose: string;
-  architectureStyle: string;
-  layerMap: ArchitectureLayer[];
-  dataFlow: string;
-  integrations: string[];
-  securityModel: string;
-  keyDecisions: string[];
-}
-
-/**
- * Stage 6 output: Enriched Architecture Decision Record
- */
-export interface EnrichedADR {
-  id: string;
-  title: string;
-  status: 'accepted' | 'proposed' | 'deprecated' | 'superseded';
-  context: string;
-  decision: string;
-  consequences: string[];
-  alternatives: string[];
-  relatedLayers: string[];
-  relatedDomains: string[];
-}
-
-/**
- * Complete pipeline result
- */
-export interface PipelineResult {
-  survey: ProjectSurveyResult;
-  entities: ExtractedEntity[];
-  services: ExtractedService[];
-  endpoints: ExtractedEndpoint[];
-  architecture: ArchitectureSynthesis;
-  adrs?: EnrichedADR[];
-  metadata: {
-    totalTokens: number;
-    estimatedCost: number;
-    duration: number;
-    completedStages: string[];
-    skippedStages: string[];
-  };
-}
-
-/**
- * Stage result for intermediate storage
- */
-export interface StageResult<T> {
-  stage: string;
-  success: boolean;
-  data?: T;
-  error?: string;
-  tokens: number;
-  duration: number;
-}
-
-/**
- * Pipeline options
- */
-export interface PipelineOptions {
-  /** Output directory for intermediate results */
-  outputDir: string;
-  /** Root path of the project — enables disk-based file reading in resolveFiles */
-  rootPath?: string;
-  /** Skip specific stages */
-  skipStages?: string[];
-  /** Resume from a specific stage */
-  resumeFrom?: string;
-  /** Maximum retries per stage */
-  maxRetries?: number;
-  /** Save intermediate results */
-  saveIntermediate?: boolean;
-  /** Generate Architecture Decision Records (triggers Stage 6) */
-  generateADRs?: boolean;
-}
-
-// ============================================================================
-// SYSTEM PROMPTS
-// ============================================================================
-
-const PROMPTS = {
-  stage1_survey: `You are a senior software architect performing a codebase audit.
-Your task is to categorize this project based on the analysis data provided.
-
-Respond with a JSON object containing:
-- projectCategory: One of ["web-frontend", "web-backend", "api-service", "cli-tool", "library", "mobile-app", "desktop-app", "data-pipeline", "ml-service", "monorepo", "other"]
-- primaryLanguage: The main language
-- frameworks: Array of detected frameworks
-- architecturePattern: One of ["layered", "hexagonal", "microservices", "monolith", "serverless", "event-driven", "mvc", "other"]
-- domainSummary: One sentence describing what this system does
-- suggestedDomains: Array of domain names for OpenSpec specs (e.g., ["user", "order", "auth", "api"])
-- confidence: 0-1 score of how confident you are
-- schemaFiles: Array of file paths (from the provided file list) that define data models, types, entities, or interfaces — these will be used for entity extraction. Include files regardless of their name, based on their content role.
-- serviceFiles: Array of file paths containing business logic, services, processors, analyzers, pipelines, or domain operations — used for service analysis. Do not filter by name conventions; look at what the file does.
-- apiFiles: Array of file paths that expose public interfaces: HTTP routes, CLI command handlers, GraphQL resolvers, message consumers, or external-facing APIs.
-
-For schemaFiles/serviceFiles/apiFiles: use the exact file paths from the provided analysis. Return [] if none apply.
-
-Respond ONLY with valid JSON.`,
-
-  stage2_entities: (projectCategory: string, frameworks: string[]) => `You are analyzing the core data models of a ${projectCategory} built with ${frameworks.join(', ')}.
-
-For each entity you identify, extract in OpenSpec format:
-- name: The entity name (e.g., "User", "Order")
-- description: What this entity represents in the business domain
-- properties: Array of {name, type, description, required}
-- relationships: Array of {targetEntity, type, description}
-- validations: Array of validation rules as strings (these become Requirements)
-- scenarios: Array of {name, given, when, then, and?} - observable behaviors in Given/When/Then format
-
-Focus on BUSINESS entities, not framework internals.
-Be precise - only include what you can verify from the code.
-
-Respond with a JSON array of entities. Respond ONLY with valid JSON.`,
-
-  stage3_services: (projectCategory: string, entities: string[], suggestedDomains: string[]) => `You are analyzing the logic and processing layer of a ${projectCategory}.
-
-Known entities: ${entities.join(', ')}
-Available domains: ${suggestedDomains.join(', ')}
-
-For each service/module, identify:
-- name: Service name
-- purpose: What capability or responsibility it encapsulates
-- operations: Array of {name, description, inputs, outputs, scenarios, functionName} - key operations/methods that become Requirements with Scenarios. Focus on the 3 most important operations per service, with 1 scenario each.
-  - operations[].functionName: The exact function or method name as written in the source code that implements this operation (e.g. "runStage2", "buildSpecMap"). Leave empty string if uncertain.
-- dependencies: Array of other services/repositories it uses
-- sideEffects: Array of external interactions (file I/O, network calls, database, queues, etc.)
-- domain: Which domain OWNS this service (where it lives in the codebase, not who uses it) — use ONLY one of the available domains listed above
-
-Focus on WHAT the service does, not HOW it's implemented.
-Express operations as requirements (SHALL/MUST/SHOULD) with testable scenarios.
-
-Respond with a JSON array of services. Respond ONLY with valid JSON.`,
-
-  stage4_api: `Extract the public API surface of this application.
-
-For each endpoint/interface, structure as:
-- method: HTTP method or interface type
-- path: Route path or interface signature
-- purpose: What it does (becomes requirement description)
-- authentication: Required auth (if detectable)
-- requestSchema: Expected input as JSON object
-- responseSchema: Expected output as JSON object
-- scenarios: Array of {name, given, when, then, and?} - example request/response flows
-- relatedEntity: Which domain entity it operates on
-
-Respond with a JSON array of endpoints. Respond ONLY with valid JSON.`,
-
-  stage5_architecture: (survey: ProjectSurveyResult) => `Based on the analysis data, synthesize a complete architecture overview for OpenSpec.
-
-Project context: ${survey.domainSummary}
-Architecture pattern: ${survey.architecturePattern}
-Domains: ${survey.suggestedDomains.join(', ')}
-
-Include:
-- systemPurpose: 2-3 sentences on what this system does and why
-- architectureStyle: The overall architecture pattern with justification
-- layerMap: Array of {name, purpose, components} - how code is organized
-- dataFlow: How data moves through the system (entry to persistence) as a string
-- integrations: Array of external systems this interacts with
-- securityModel: Authentication/authorization approach as a string
-- keyDecisions: Array of observable architectural decisions as strings
-
-Express each key architectural aspect clearly.
-Base all conclusions on the code evidence provided.
-Where uncertain, say so explicitly.
-
-Respond with a JSON object. Respond ONLY with valid JSON.`,
-
-  stage6_adr: (architecture: ArchitectureSynthesis) => `You are a senior software architect creating Architecture Decision Records (ADRs).
-
-For each key decision listed below, produce a complete ADR with:
-- id: Sequential like "ADR-001", "ADR-002", etc.
-- title: The decision as a clear statement (e.g., "Use TypeORM for database access")
-- status: "accepted" (these are observed decisions already implemented in the code)
-- context: 2-3 sentences on why this decision was needed
-- decision: 1-2 sentences clearly stating what was decided
-- consequences: Array of 2-4 consequences (include both positive and negative)
-- alternatives: Array of 1-3 alternatives that could have been chosen instead
-- relatedLayers: Array of architecture layer names affected (from: ${architecture.layerMap.map(l => l.name).join(', ')})
-- relatedDomains: Array of domain names affected
-
-Architecture context:
-- System purpose: ${architecture.systemPurpose}
-- Architecture style: ${architecture.architectureStyle}
-- Layers: ${architecture.layerMap.map(l => `${l.name} (${l.purpose})`).join(', ')}
-- Data flow: ${architecture.dataFlow}
-- Security model: ${architecture.securityModel}
-- External integrations: ${architecture.integrations.join(', ') || 'None'}
-
-Key decisions to expand into full ADRs:
-${architecture.keyDecisions.map((d, i) => `${i + 1}. ${d}`).join('\n')}
-
-Base all conclusions on the code evidence provided. Where uncertain, say so explicitly.
-Respond with a JSON array of ADR objects. Respond ONLY with valid JSON.`,
-};
+// Re-export all types for backward compatibility with external consumers
+export type {
+  ProjectCategory,
+  ArchitecturePattern,
+  ProjectSurveyResult,
+  EntityProperty,
+  EntityRelationship,
+  Scenario,
+  ExtractedEntity,
+  ServiceOperation,
+  ServiceSubSpec,
+  ExtractedService,
+  ExtractedEndpoint,
+  ArchitectureLayer,
+  ArchitectureSynthesis,
+  EnrichedADR,
+  PipelineResult,
+  StageResult,
+  PipelineOptions,
+  PipelineContext,
+} from '../../types/pipeline.js';
 
 // ============================================================================
 // SPEC GENERATION PIPELINE
@@ -363,13 +66,16 @@ Respond with a JSON array of ADR objects. Respond ONLY with valid JSON.`,
 /**
  * Spec Generation Pipeline
  */
-export class SpecGenerationPipeline {
-  private llm: LLMService;
-  private options: Required<PipelineOptions>;
-  private stageResults: Map<string, StageResult<unknown>> = new Map();
+export class SpecGenerationPipeline implements PipelineContext {
+  llm: LLMService;
+  options: Required<Omit<PipelineOptions, 'progress'>>;
+  private progress?: ProgressIndicator;
+  /** Set at the start of run() and used by stage methods for graph-based prompts */
+  private currentLLMContext?: LLMContext;
 
   constructor(llm: LLMService, options: PipelineOptions) {
     this.llm = llm;
+    this.progress = options.progress;
     this.options = {
       outputDir: options.outputDir,
       skipStages: options.skipStages ?? [],
@@ -389,6 +95,7 @@ export class SpecGenerationPipeline {
     llmContext: LLMContext,
     depGraph?: DependencyGraphResult
   ): Promise<PipelineResult> {
+    this.currentLLMContext = llmContext;
     const startTime = Date.now();
     let totalTokens = 0;
     const completedStages: string[] = [];
@@ -399,135 +106,149 @@ export class SpecGenerationPipeline {
       await mkdir(this.options.outputDir, { recursive: true });
     }
 
-    // Stage 1: Project Survey
-    let survey: ProjectSurveyResult;
-    if (this.shouldRunStage('survey')) {
-      logger.analysis('Running Stage 1: Project Survey');
-      const result = await this.runStage1(repoStructure, llmContext);
-      if (result.success && result.data) {
-        // Normalize: LLM may omit array fields, which causes undefined.join/length crashes downstream
-        survey = {
-          ...result.data,
-          frameworks: result.data.frameworks ?? [],
-          suggestedDomains: result.data.suggestedDomains ?? [],
-          schemaFiles: result.data.schemaFiles ?? [],
-          serviceFiles: result.data.serviceFiles ?? [],
-          apiFiles: result.data.apiFiles ?? [],
-        };
-        totalTokens += result.tokens;
-        completedStages.push('survey');
+    const totalStages = this.options.generateADRs ? 6 : 5;
+    let stageNum = 0;
+
+     const startStage = (name: string, label: string) => {
+       stageNum++;
+       if (this.progress) {
+         this.progress.updateGeneration({ stage: stageNum, totalStages, stageName: label });
+       } else {
+         logger.analysis(`Running Stage ${stageNum}: ${label}`);
+       }
+     };
+
+     // Helper to execute a pipeline stage with consistent error handling
+     const executeStage = async <T extends object>(
+       name: string,
+       label: string,
+       runner: () => Promise<StageResult<T>>,
+       fallback: () => T | Promise<T>,
+       normalize?: (data: T) => T,
+       onSuccess?: (data: T) => void
+     ): Promise<T> => {
+       if (!this.shouldRunStage(name)) {
+         skippedStages.push(name);
+         return fallback();
+       }
+
+       startStage(name, label);
+       const result = await runner();
+
+       if (result.success && result.data) {
+         let data = result.data;
+         if (normalize) data = normalize(data);
+         totalTokens += result.tokens;
+         completedStages.push(name);
+         if (onSuccess) onSuccess(data);
+         return data;
       } else {
         const errorMsg = result.error ?? 'Unknown error';
-        logger.warning(`Survey stage failed: ${errorMsg}`);
-        if (errorMsg.includes('Unauthorized') || errorMsg.includes('401') || errorMsg.includes('403')) {
-          throw new Error(`API authentication failed: ${errorMsg}. Check your API key (OPENAI_COMPAT_API_KEY, ANTHROPIC_API_KEY, etc.)`);
+        this.progress?.stop();
+        logger.warning(`${label} failed: ${errorMsg}`);
+        if (name === 'survey' && /Unauthorized|401|403/i.test(errorMsg)) {
+          throw new Error(`API authentication failed: ${errorMsg}. Check your API key`);
         }
-        survey = this.getDefaultSurvey(repoStructure);
-        skippedStages.push('survey');
+        return await fallback();
       }
-    } else {
-      skippedStages.push('survey');
-      survey = this.getDefaultSurvey(repoStructure);
-    }
+      };
 
-    // Stage 2: Entity Extraction
-    let entities: ExtractedEntity[] = [];
-    if (this.shouldRunStage('entities')) {
-      logger.analysis('Running Stage 2: Entity Extraction');
+      // Stage 1: Project Survey
+      const survey = await executeStage(
+        'survey',
+        'Project Survey',
+        async () => runStage1(this.llm, this.options, this.saveResult.bind(this), repoStructure, llmContext),
+        () => this.getDefaultSurvey(repoStructure),
+        data => ({
+          ...data,
+          frameworks: data.frameworks ?? [],
+          suggestedDomains: data.suggestedDomains ?? [],
+          schemaFiles: data.schemaFiles ?? [],
+          serviceFiles: data.serviceFiles ?? [],
+          apiFiles: data.apiFiles ?? [],
+        })
+      );
+
+      // Stage 2: Entity Extraction
+      let entities: ExtractedEntity[] = [];
       const schemaFiles = await this.resolveFiles(llmContext, survey.schemaFiles ?? [], this.getSchemaFiles(llmContext));
       if (schemaFiles.length > 0) {
-        const result = await this.runStage2(survey, schemaFiles);
-        entities = result.data ?? [];
-        totalTokens += result.tokens;
-        completedStages.push('entities');
+        entities = await executeStage(
+          'entities',
+          'Entity Extraction',
+          async () => runStage2(this, survey, schemaFiles, (i, total, file) => {
+            this.progress?.updateGeneration({ stage: stageNum, totalStages, stageName: `Entity Extraction ${i}/${total}: ${file}` });
+          }),
+          () => []
+        );
       } else {
         logger.warning('No schema files found, skipping entity extraction');
         skippedStages.push('entities');
       }
-    } else {
-      skippedStages.push('entities');
-    }
 
-    // Stage 3: Service Analysis
-    let services: ExtractedService[] = [];
-    if (this.shouldRunStage('services')) {
-      logger.analysis('Running Stage 3: Service Analysis');
+      // Stage 3: Service Analysis
+      let services: ExtractedService[] = [];
       const serviceFiles = await this.resolveFiles(llmContext, survey.serviceFiles ?? [], this.getServiceFiles(llmContext));
       if (serviceFiles.length > 0) {
-        const result = await this.runStage3(survey, entities, serviceFiles);
-        services = result.data ?? [];
-        totalTokens += result.tokens;
-        completedStages.push('services');
+        services = await executeStage(
+          'services',
+          'Service Analysis',
+          async () => runStage3(this, survey, entities, serviceFiles, (i, total, file) => {
+            this.progress?.updateGeneration({ stage: stageNum, totalStages, stageName: `Service Analysis ${i}/${total}: ${file}` });
+          }),
+          () => []
+        );
       } else {
         logger.warning('No service files found, skipping service analysis');
         skippedStages.push('services');
       }
-    } else {
-      skippedStages.push('services');
-    }
 
-    // Stage 4: API Extraction
-    let endpoints: ExtractedEndpoint[] = [];
-    if (this.shouldRunStage('api')) {
-      logger.analysis('Running Stage 4: API Extraction');
-      const apiFiles = await this.resolveFiles(llmContext, survey.apiFiles ?? [], this.getApiFiles(llmContext));
-      if (apiFiles.length > 0) {
-        const result = await this.runStage4(apiFiles);
-        endpoints = result.data ?? [];
-        totalTokens += result.tokens;
-        completedStages.push('api');
-      } else {
-        logger.warning('No API files found, skipping API extraction');
-        skippedStages.push('api');
-      }
-    } else {
-      skippedStages.push('api');
-    }
+       // Stage 4: API Extraction
+       let endpoints: ExtractedEndpoint[] = [];
+       const apiFiles = await this.resolveFiles(llmContext, survey.apiFiles ?? [], this.getApiFiles(llmContext));
+       if (apiFiles.length > 0) {
+         endpoints = await executeStage(
+           'api',
+           'API Extraction',
+           async () => runStage4(this, apiFiles, (i, total, file) => {
+             this.progress?.updateGeneration({ stage: stageNum, totalStages, stageName: `API Extraction ${i}/${total}: ${file}` });
+           }),
+           () => []
+         );
+       } else {
+         logger.warning('No API files found, skipping API extraction');
+         skippedStages.push('api');
+       }
 
-    // Stage 5: Architecture Synthesis
-    let architecture: ArchitectureSynthesis;
-    if (this.shouldRunStage('architecture')) {
-      logger.analysis('Running Stage 5: Architecture Synthesis');
-      const result = await this.runStage5(survey, entities, services, endpoints, depGraph, llmContext.callGraph);
-      if (result.success && result.data) {
-        // Normalize: LLM may omit array fields, which causes undefined.length crashes downstream
-        architecture = {
-          ...result.data,
-          layerMap: result.data.layerMap ?? [],
-          integrations: result.data.integrations ?? [],
-          keyDecisions: result.data.keyDecisions ?? [],
-        };
-        totalTokens += result.tokens;
-        completedStages.push('architecture');
-      } else {
-        logger.warning('Architecture stage failed, using defaults');
-        architecture = this.getDefaultArchitecture(survey);
-        skippedStages.push('architecture');
-      }
-    } else {
-      skippedStages.push('architecture');
-      architecture = this.getDefaultArchitecture(survey);
-    }
+       // Stage 5: Architecture Synthesis
+       const architecture = await executeStage(
+         'architecture',
+         'Architecture Synthesis',
+         async () => runStage5(this, survey, entities, services, endpoints, depGraph, llmContext.callGraph),
+         () => this.getDefaultArchitecture(survey),
+         data => ({
+           ...data,
+           layerMap: data.layerMap ?? [],
+           integrations: data.integrations ?? [],
+           keyDecisions: data.keyDecisions ?? [],
+         })
+       );
 
-    // Stage 6: ADR Enrichment (optional)
-    let adrs: EnrichedADR[] = [];
-    if (this.options.generateADRs && this.shouldRunStage('adr')) {
-      if (architecture.keyDecisions.length > 0) {
-        logger.analysis('Running Stage 6: ADR Enrichment');
-        const result = await this.runStage6(architecture);
-        adrs = result.data ?? [];
-        totalTokens += result.tokens;
-        if (result.success) {
-          completedStages.push('adr');
+      // Stage 6: ADR Enrichment (optional)
+      let adrs: EnrichedADR[] = [];
+      if (this.options.generateADRs && this.shouldRunStage('adr')) {
+        if (architecture.keyDecisions.length > 0) {
+          adrs = await executeStage(
+            'adr',
+            'ADR Enrichment',
+            async () => runStage6(this, architecture),
+            () => [] as EnrichedADR[]
+          );
         } else {
-          logger.warning('ADR enrichment failed');
+          logger.warning('No key decisions found, skipping ADR enrichment');
           skippedStages.push('adr');
         }
-      } else {
-        logger.warning('No key decisions found, skipping ADR enrichment');
-        skippedStages.push('adr');
       }
-    }
 
     const duration = Date.now() - startTime;
     const costTracking = this.llm.getCostTracking();
@@ -577,127 +298,12 @@ export class SpecGenerationPipeline {
   }
 
   /**
-   * Stage 1: Project Survey
-   * Uses function signatures for all project files when available (language-agnostic),
-   * chunking into multiple LLM calls if the total exceeds STAGE1_MAX_CHARS.
-   * Falls back to the legacy phase2_deep file-path list if signatures are absent.
-   */
-  private async runStage1(repoStructure: RepoStructure, llmContext: LLMContext): Promise<StageResult<ProjectSurveyResult>> {
-    if (llmContext.signatures && llmContext.signatures.length > 0) {
-      const chunks = formatSignatureMaps(llmContext.signatures, STAGE1_MAX_CHARS);
-      if (chunks.length === 1) {
-        return this.runStage1WithSection(repoStructure, chunks[0], true);
-      }
-      logger.analysis(`Stage 1: ${chunks.length} signature chunks across ${llmContext.signatures.length} files`);
-      const results = await Promise.all(chunks.map(c => this.runStage1WithSection(repoStructure, c, true)));
-      return this.mergeStage1Results(results);
-    }
-    // Legacy fallback — only the 20 files in phase2_deep are visible
-    const section = llmContext.phase2_deep.files.map(f => `- ${f.path}`).join('\n');
-    return this.runStage1WithSection(repoStructure, section, false);
-  }
-
-  /**
-   * Single Stage 1 LLM call for one chunk of files/signatures.
-   */
-  private async runStage1WithSection(
-    repoStructure: RepoStructure,
-    fileListingSection: string,
-    isSignatures: boolean,
-  ): Promise<StageResult<ProjectSurveyResult>> {
-    const startTime = Date.now();
-
-    const sectionLabel = isSignatures
-      ? 'Function/class signatures extracted from all project files (use exact file paths shown in === headers for schemaFiles/serviceFiles/apiFiles):'
-      : 'Available file paths for analysis (use ONLY these exact strings for schemaFiles/serviceFiles/apiFiles):';
-
-    const userPrompt = `Analyze this project structure:
-
-Project Name: ${repoStructure.projectName}
-Project Type: ${repoStructure.projectType}
-Frameworks: ${repoStructure.frameworks.join(', ')}
-Architecture Pattern: ${repoStructure.architecture.pattern}
-
-Layers:
-${repoStructure.architecture.layers.map(l => `- ${l.name}: ${l.purpose} (${l.files.length} files)`).join('\n')}
-
-Detected Domains:
-${repoStructure.domains.map(d => `- ${d.name}: ${d.files.length} files, entities: ${d.entities.join(', ')}`).join('\n')}
-
-Statistics:
-- Total files: ${repoStructure.statistics.totalFiles}
-- Analyzed files: ${repoStructure.statistics.analyzedFiles}
-- Node count: ${repoStructure.statistics.nodeCount}
-- Edge count: ${repoStructure.statistics.edgeCount}
-- Clusters: ${repoStructure.statistics.clusterCount}
-
-${sectionLabel}
-${fileListingSection}`;
-
-    try {
-      const result = await this.llm.completeJSON<ProjectSurveyResult>({
-        systemPrompt: PROMPTS.stage1_survey,
-        userPrompt,
-        temperature: 0.3,
-        maxTokens: 1000,
-      });
-
-      const stageResult: StageResult<ProjectSurveyResult> = {
-        stage: 'survey',
-        success: true,
-        data: result,
-        tokens: this.llm.getTokenUsage().totalTokens,
-        duration: Date.now() - startTime,
-      };
-
-      if (this.options.saveIntermediate) {
-        await this.saveResult('stage1-survey', stageResult);
-      }
-
-      return stageResult;
-    } catch (error) {
-      return {
-        stage: 'survey',
-        success: false,
-        error: (error as Error).message,
-        tokens: 0,
-        duration: Date.now() - startTime,
-      };
-    }
-  }
-
-  /**
-   * Merge multiple Stage 1 results (from chunked runs) into one.
-   * Uses the highest-confidence result for metadata; concatenates + deduplicates file lists.
-   */
-  private mergeStage1Results(results: StageResult<ProjectSurveyResult>[]): StageResult<ProjectSurveyResult> {
-    const successful = results.filter(r => r.success && r.data);
-    if (successful.length === 0) return results[0];
-
-    const best = successful.reduce((a, b) => (a.data!.confidence >= b.data!.confidence ? a : b));
-
-    return {
-      ...best,
-      data: {
-        ...best.data!,
-        frameworks:      best.data!.frameworks      ?? [],
-        suggestedDomains: best.data!.suggestedDomains ?? [],
-        schemaFiles:  [...new Set(successful.flatMap(r => r.data!.schemaFiles  ?? []))],
-        serviceFiles: [...new Set(successful.flatMap(r => r.data!.serviceFiles ?? []))],
-        apiFiles:     [...new Set(successful.flatMap(r => r.data!.apiFiles     ?? []))],
-      },
-      tokens:   results.reduce((s, r) => s + r.tokens, 0),
-      duration: results.reduce((s, r) => s + r.duration, 0),
-    };
-  }
-
-  /**
    * Split file content into chunks, breaking only on blank lines (function/class boundaries).
    * A chunk is emitted when its size exceeds maxChars and a blank line is encountered.
    * overlapLines trailing lines from the previous chunk are prepended to the next one,
    * preserving context (e.g. class declaration visible when processing its methods).
    */
-  private chunkContent(content: string, maxChars: number, overlapLines = 10): string[] {
+  chunkContent(content: string, maxChars: number, overlapLines = 10): string[] {
     if (content.length <= maxChars) return [content];
 
     const lines = content.split('\n');
@@ -727,278 +333,116 @@ ${fileListingSection}`;
   }
 
   /**
-   * Stage 2: Entity Extraction — one LLM call per file (chunked if large)
+   * For a large file, try to build a graph-based prompt section.
+   * Returns null when no call graph data is available or the file has no god functions
+   * (caller should fall back to raw source chunking).
+   *
+   * When file content is provided, appends a stripped skeleton when it achieves
+   * a meaningful size reduction (≥ 20%), giving the LLM both topology and
+   * internal control-flow structure.
    */
-  private async runStage2(
-    survey: ProjectSurveyResult,
-    schemaFiles: Array<{ path: string; content: string }>
-  ): Promise<StageResult<ExtractedEntity[]>> {
-    const startTime = Date.now();
-    const systemPrompt = PROMPTS.stage2_entities(survey.projectCategory, survey.frameworks);
-    const allEntities: ExtractedEntity[] = [];
-    const seenNames = new Set<string>();
+  graphPromptFor(filePath: string, content?: string): string | null {
+    const ctx = this.currentLLMContext;
+    if (!ctx?.callGraph) return null;
 
-    for (const file of schemaFiles) {
-      const chunks = this.chunkContent(file.content, 8000);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
-        const userPrompt = `Analyze this schema/model file and extract entities:\n\n=== ${file.path}${chunkNote} ===\n${chunks[i]}`;
-        try {
-          const result = await this.llm.completeJSON<ExtractedEntity[]>({
-            systemPrompt,
-            userPrompt,
-            temperature: 0.3,
-            maxTokens: 2000,
-          });
-          if (Array.isArray(result)) {
-            for (const entity of result) {
-              if (!seenNames.has(entity.name)) {
-                seenNames.add(entity.name);
-                entity.location = file.path; // always use the actual file, not the LLM's guess
-                allEntities.push(entity);
-              }
-            }
-          }
-        } catch (error) {
-          logger.warning(`Stage 2: failed to analyze ${file.path}${chunkNote}: ${(error as Error).message}`);
-        }
-      }
+    const graphSection = buildGraphPromptSection(ctx.callGraph, ctx.signatures, filePath);
+    if (!graphSection) return null;
+    if (!content) return graphSection;
+
+    const language = detectLanguage(filePath);
+    const skeleton = getSkeletonContent(content, language);
+
+    if (isSkeletonWorthIncluding(content, skeleton)) {
+      // Cap skeleton at 4000 chars to avoid overwhelming the prompt
+      const cap = 4000;
+      const skeletonExcerpt = skeleton.length > cap
+        ? skeleton.slice(0, cap) + '\n... [skeleton truncated]'
+        : skeleton;
+      return `${graphSection}\n\nFunction skeleton (logs/comments stripped):\n${skeletonExcerpt}`;
     }
 
-    const stageResult: StageResult<ExtractedEntity[]> = {
-      stage: 'entities',
-      success: true,
-      data: allEntities,
-      tokens: this.llm.getTokenUsage().totalTokens,
-      duration: Date.now() - startTime,
-    };
-
-    if (this.options.saveIntermediate) {
-      await this.saveResult('stage2-entities', stageResult);
-    }
-
-    return stageResult;
+    return graphSection;
   }
 
   /**
-   * Stage 3: Service Analysis — one LLM call per file (chunked if large)
+   * Generate sub-specifications for the direct callees of god functions in a file.
+   * Makes a single batched LLM call covering all callees at once.
+   * Returns [] when no graph data or no god functions are found.
    */
-  private async runStage3(
-    survey: ProjectSurveyResult,
-    entities: ExtractedEntity[],
-    serviceFiles: Array<{ path: string; content: string }>
-  ): Promise<StageResult<ExtractedService[]>> {
-    const startTime = Date.now();
-    const entityNames = entities.map(e => e.name);
-    const systemPrompt = PROMPTS.stage3_services(survey.projectCategory, entityNames, survey.suggestedDomains ?? []);
-    const allServices: ExtractedService[] = [];
-    const seenNames = new Set<string>();
+  async generateSubSpecs(
+    filePath: string,
+    parentName: string,
+    parentPurpose: string,
+  ): Promise<ServiceSubSpec[]> {
+    const callGraph = this.currentLLMContext?.callGraph;
+    if (!callGraph) return [];
 
-    for (const file of serviceFiles) {
-      const chunks = this.chunkContent(file.content, 8000);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
-        const userPrompt = `Analyze this file and extract services/modules:\n\n=== ${file.path}${chunkNote} ===\n${chunks[i]}`;
-        try {
-          const result = await this.llm.completeJSON<ExtractedService[]>({
-            systemPrompt,
-            userPrompt,
-            temperature: 0.3,
-            maxTokens: 2000,
-          });
-          if (Array.isArray(result)) {
-            for (const service of result) {
-              if (!seenNames.has(service.name)) {
-                seenNames.add(service.name);
-                allServices.push(service);
-              }
-            }
-          }
-        } catch (error) {
-          logger.warning(`Stage 3: failed to analyze ${file.path}${chunkNote}: ${(error as Error).message}`);
-        }
+    const godFunctions = getFileGodFunctions(callGraph, filePath);
+    if (godFunctions.length === 0) return [];
+
+    // Collect unique direct callees across all god functions in this file
+    const seenCallees = new Set<string>();
+    const calleeInfos: Array<{
+      name: string;
+      signature?: string;
+      docstring?: string;
+      subcallees: string[];
+    }> = [];
+
+    for (const godFn of godFunctions) {
+      const sub = extractSubgraph(callGraph, godFn);
+      const directCallees = [...new Set(
+        sub.edges.filter(([from]) => from === godFn.name).map(([, to]) => to)
+      )];
+
+      for (const calleeName of directCallees) {
+        if (seenCallees.has(calleeName)) continue;
+        seenCallees.add(calleeName);
+
+        const sigEntry = this.currentLLMContext?.signatures
+          ?.flatMap(s => s.entries)
+          .find(e => e.name === calleeName);
+
+        const subcallees = [...new Set(
+          sub.edges.filter(([from]) => from === calleeName).map(([, to]) => to)
+        )];
+
+        calleeInfos.push({
+          name: calleeName,
+          signature: sigEntry?.signature,
+          docstring: sigEntry?.docstring,
+          subcallees,
+        });
       }
     }
 
-    const stageResult: StageResult<ExtractedService[]> = {
-      stage: 'services',
-      success: true,
-      data: allServices,
-      tokens: this.llm.getTokenUsage().totalTokens,
-      duration: Date.now() - startTime,
-    };
-
-    if (this.options.saveIntermediate) {
-      await this.saveResult('stage3-services', stageResult);
-    }
-
-    return stageResult;
-  }
-
-  /**
-   * Stage 4: API Extraction — one LLM call per file (chunked if large)
-   */
-  private async runStage4(
-    apiFiles: Array<{ path: string; content: string }>
-  ): Promise<StageResult<ExtractedEndpoint[]>> {
-    const startTime = Date.now();
-    const allEndpoints: ExtractedEndpoint[] = [];
-    const seenPaths = new Set<string>();
-
-    for (const file of apiFiles) {
-      const chunks = this.chunkContent(file.content, 8000);
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkNote = chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : '';
-        const userPrompt = `Analyze this API/route file and extract endpoints:\n\n=== ${file.path}${chunkNote} ===\n${chunks[i]}`;
-        try {
-          const result = await this.llm.completeJSON<ExtractedEndpoint[]>({
-            systemPrompt: PROMPTS.stage4_api,
-            userPrompt,
-            temperature: 0.3,
-            maxTokens: 2000,
-          });
-          if (Array.isArray(result)) {
-            for (const endpoint of result) {
-              const key = `${endpoint.method}:${endpoint.path}`;
-              if (!seenPaths.has(key)) {
-                seenPaths.add(key);
-                allEndpoints.push(endpoint);
-              }
-            }
-          }
-        } catch (error) {
-          logger.warning(`Stage 4: failed to analyze ${file.path}${chunkNote}: ${(error as Error).message}`);
-        }
-      }
-    }
-
-    const stageResult: StageResult<ExtractedEndpoint[]> = {
-      stage: 'api',
-      success: true,
-      data: allEndpoints,
-      tokens: this.llm.getTokenUsage().totalTokens,
-      duration: Date.now() - startTime,
-    };
-
-    if (this.options.saveIntermediate) {
-      await this.saveResult('stage4-api', stageResult);
-    }
-
-    return stageResult;
-  }
-
-  /**
-   * Stage 5: Architecture Synthesis
-   */
-  private async runStage5(
-    survey: ProjectSurveyResult,
-    entities: ExtractedEntity[],
-    services: ExtractedService[],
-    endpoints: ExtractedEndpoint[],
-    depGraph?: DependencyGraphResult,
-    callGraph?: import('../analyzer/call-graph.js').SerializedCallGraph
-  ): Promise<StageResult<ArchitectureSynthesis>> {
-    const startTime = Date.now();
-
-    const userPrompt = `Synthesize the architecture from this analysis:
-
-Entities (${entities.length}):
-${entities.map(e => `- ${e.name}: ${e.description}`).join('\n')}
-
-Services (${services.length}):
-${services.map(s => `- ${s.name}: ${s.purpose}`).join('\n')}
-
-Endpoints (${endpoints.length}):
-${endpoints.map(e => `- ${e.method} ${e.path}: ${e.purpose}`).join('\n')}
-
-${depGraph ? `Dependency Graph:
-- Nodes: ${depGraph.statistics.nodeCount}
-- Edges: ${depGraph.statistics.edgeCount}
-- Clusters: ${depGraph.statistics.clusterCount}
-- Cycles: ${depGraph.statistics.cycleCount}` : ''}${callGraph && callGraph.stats.totalNodes > 0 ? `
-
-Call Graph (static analysis — ${callGraph.stats.totalNodes} functions, ${callGraph.stats.totalEdges} internal calls):
-${callGraph.hubFunctions.length > 0 ? `Hub functions (called by many others — likely integration points):
-${callGraph.hubFunctions.slice(0, 8).map(n => `- ${n.name} (${n.filePath}, fanIn=${n.fanIn}, fanOut=${n.fanOut}${n.className ? `, class=${n.className}` : ''})`).join('\n')}` : ''}
-${callGraph.entryPoints.length > 0 ? `\nEntry points (no internal callers — likely public API or CLI handlers):
-${callGraph.entryPoints.slice(0, 8).map(n => `- ${n.name} (${n.filePath}${n.isAsync ? ', async' : ''})`).join('\n')}` : ''}
-${callGraph.layerViolations.length > 0 ? `\nLayer violations detected:
-${callGraph.layerViolations.slice(0, 5).map(v => `- ${v.reason}`).join('\n')}` : ''}` : ''}`;
+    if (calleeInfos.length === 0) return [];
 
     try {
-      const result = await this.llm.completeJSON<ArchitectureSynthesis>({
-        systemPrompt: PROMPTS.stage5_architecture(survey),
-        userPrompt,
+      const result = await this.llm.completeJSON<ServiceSubSpec[]>({
+        systemPrompt: PROMPTS.stage3_subspec_system,
+        userPrompt: PROMPTS.stage3_subspec(parentName, parentPurpose, calleeInfos),
         temperature: 0.3,
-        maxTokens: 2000,
+        maxTokens: 4000,
       });
-
-      const stageResult: StageResult<ArchitectureSynthesis> = {
-        stage: 'architecture',
-        success: true,
-        data: result,
-        tokens: this.llm.getTokenUsage().totalTokens,
-        duration: Date.now() - startTime,
-      };
-
-      if (this.options.saveIntermediate) {
-        await this.saveResult('stage5-architecture', stageResult);
+      if (Array.isArray(result)) {
+        // Ensure callee field is set — LLM sometimes names it differently
+        for (const sub of result) {
+          if (!sub.callee) {
+            const matched = calleeInfos.find(
+              c => c.name === sub.name ||
+              c.name.toLowerCase().includes((sub.name ?? '').toLowerCase())
+            );
+            sub.callee = matched?.name ?? sub.name;
+          }
+          sub.operations = sub.operations ?? [];
+        }
+        return result;
       }
-
-      return stageResult;
     } catch (error) {
-      return {
-        stage: 'architecture',
-        success: false,
-        error: (error as Error).message,
-        tokens: 0,
-        duration: Date.now() - startTime,
-      };
+      logger.warning(`Sub-specs: failed for ${parentName}: ${(error as Error).message}`);
     }
-  }
-
-  /**
-   * Stage 6: ADR Enrichment
-   */
-  private async runStage6(
-    architecture: ArchitectureSynthesis
-  ): Promise<StageResult<EnrichedADR[]>> {
-    const startTime = Date.now();
-
-    const userPrompt = `Expand these ${architecture.keyDecisions.length} architectural decisions into full ADRs:
-
-${architecture.keyDecisions.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
-
-    try {
-      const result = await this.llm.completeJSON<EnrichedADR[]>({
-        systemPrompt: PROMPTS.stage6_adr(architecture),
-        userPrompt,
-        temperature: 0.3,
-        maxTokens: 3000,
-      });
-
-      const stageResult: StageResult<EnrichedADR[]> = {
-        stage: 'adr',
-        success: true,
-        data: result,
-        tokens: this.llm.getTokenUsage().totalTokens,
-        duration: Date.now() - startTime,
-      };
-
-      if (this.options.saveIntermediate) {
-        await this.saveResult('stage6-adr-enrichment', stageResult);
-      }
-
-      return stageResult;
-    } catch (error) {
-      return {
-        stage: 'adr',
-        success: false,
-        error: (error as Error).message,
-        tokens: 0,
-        duration: Date.now() - startTime,
-      };
-    }
+    return [];
   }
 
   /**
@@ -1141,7 +585,7 @@ ${architecture.keyDecisions.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
   /**
    * Save intermediate result
    */
-  private async saveResult(name: string, data: unknown): Promise<void> {
+  async saveResult(name: string, data: unknown): Promise<void> {
     const filepath = join(this.options.outputDir, `${name}.json`);
     await writeFile(filepath, JSON.stringify(data, null, 2));
     logger.debug(`Saved ${name} to ${filepath}`);

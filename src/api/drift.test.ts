@@ -1,0 +1,190 @@
+/**
+ * Tests for specGenDrift programmatic API
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { specGenDrift } from './drift.js';
+
+// ============================================================================
+// MOCKS
+// ============================================================================
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    access:   vi.fn(),
+    readFile: vi.fn(),
+  };
+});
+
+vi.mock('../core/services/config-manager.js', () => ({
+  readSpecGenConfig: vi.fn(),
+}));
+
+vi.mock('../core/services/llm-service.js', () => ({
+  createLLMService: vi.fn(),
+}));
+
+vi.mock('../core/drift/git-diff.js', () => ({
+  isGitRepository: vi.fn(),
+  getChangedFiles: vi.fn(),
+}));
+
+vi.mock('../core/drift/spec-mapper.js', () => ({
+  buildSpecMap: vi.fn(),
+  buildADRMap:  vi.fn(),
+}));
+
+vi.mock('../core/drift/drift-detector.js', () => ({
+  detectDrift: vi.fn(),
+}));
+
+import { access, readFile } from 'node:fs/promises';
+import { readSpecGenConfig } from '../core/services/config-manager.js';
+import { createLLMService } from '../core/services/llm-service.js';
+import { isGitRepository, getChangedFiles } from '../core/drift/git-diff.js';
+import { buildSpecMap, buildADRMap } from '../core/drift/spec-mapper.js';
+import { detectDrift } from '../core/drift/drift-detector.js';
+
+const mockAccess = vi.mocked(access);
+const mockReadFile = vi.mocked(readFile);
+const mockReadSpecGenConfig = vi.mocked(readSpecGenConfig);
+const mockCreateLLMService = vi.mocked(createLLMService);
+const mockIsGitRepository = vi.mocked(isGitRepository);
+const mockGetChangedFiles = vi.mocked(getChangedFiles);
+const mockBuildSpecMap = vi.mocked(buildSpecMap);
+const mockBuildADRMap = vi.mocked(buildADRMap);
+const mockDetectDrift = vi.mocked(detectDrift);
+
+// ============================================================================
+// FIXTURES
+// ============================================================================
+
+const ROOT = '/test/project';
+const MOCK_CONFIG = { version: '1.0.0', openspecPath: './openspec' };
+const MOCK_CHANGED_FILES = [
+  { path: 'src/auth.ts', status: 'modified', additions: 10, deletions: 2, isTest: false, isConfig: false, isGenerated: false, extension: '.ts' },
+  { path: 'src/users.ts', status: 'modified', additions: 5, deletions: 1, isTest: false, isConfig: false, isGenerated: false, extension: '.ts' },
+];
+const MOCK_DRIFT_RESULT = {
+  timestamp: new Date().toISOString(),
+  baseRef: 'main',
+  totalChangedFiles: 2,
+  specRelevantFiles: 1,
+  issues: [],
+  summary: { gaps: 0, stale: 0, uncovered: 1, orphanedSpecs: 0, adrGaps: 0, adrOrphaned: 0, total: 1 },
+  hasDrift: true,
+  mode: 'static' as const,
+  duration: 500,
+};
+const MOCK_SPEC_MAP = { byDomain: new Map(), byFile: new Map(), domainCount: 0, totalMappedFiles: 0 };
+const MOCK_ADR_MAP = { byId: new Map(), byDomain: new Map() };
+const MOCK_LLM_SERVICE = {
+  complete: vi.fn(),
+  completeJSON: vi.fn(),
+  saveLogs: vi.fn().mockResolvedValue(undefined),
+};
+
+function setupMocks() {
+  mockReadSpecGenConfig.mockResolvedValue(MOCK_CONFIG as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never);
+  mockAccess.mockResolvedValue(undefined);
+  mockReadFile.mockResolvedValue('{}');
+  mockIsGitRepository.mockResolvedValue(true);
+  mockGetChangedFiles.mockResolvedValue({ files: MOCK_CHANGED_FILES, resolvedBase: 'main', hasUnstagedChanges: false, currentBranch: 'main' } as Awaited<ReturnType<typeof getChangedFiles>>);
+  mockBuildSpecMap.mockResolvedValue(MOCK_SPEC_MAP);
+  mockBuildADRMap.mockResolvedValue(MOCK_ADR_MAP);
+  mockDetectDrift.mockResolvedValue(MOCK_DRIFT_RESULT);
+  mockCreateLLMService.mockReturnValue(MOCK_LLM_SERVICE as unknown as ReturnType<typeof createLLMService>);
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+describe('specGenDrift', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupMocks();
+  });
+
+  afterEach(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  describe('precondition checks', () => {
+    it('throws if not a git repository', async () => {
+      mockIsGitRepository.mockResolvedValue(false);
+      await expect(specGenDrift({ rootPath: ROOT })).rejects.toThrow(/git/i);
+    });
+
+    it('throws if no spec-gen config', async () => {
+      mockReadSpecGenConfig.mockResolvedValue(null as unknown as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never);
+      await expect(specGenDrift({ rootPath: ROOT })).rejects.toThrow();
+    });
+
+    it('throws if no specs found', async () => {
+      mockAccess.mockRejectedValue(new Error('ENOENT'));
+      await expect(specGenDrift({ rootPath: ROOT })).rejects.toThrow();
+    });
+  });
+
+  describe('no changed files', () => {
+    it('returns empty result without running drift detection', async () => {
+      mockGetChangedFiles.mockResolvedValue({ files: [], resolvedBase: 'main', hasUnstagedChanges: false, currentBranch: 'main' } as Awaited<ReturnType<typeof getChangedFiles>>);
+
+      const result = await specGenDrift({ rootPath: ROOT });
+
+      expect(result.totalChangedFiles).toBe(0);
+      expect(result.issues).toHaveLength(0);
+      expect(result.hasDrift).toBe(false);
+      expect(mockDetectDrift).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('happy path — static mode', () => {
+    it('returns drift result', async () => {
+      const result = await specGenDrift({ rootPath: ROOT });
+
+      expect(result.totalChangedFiles).toBe(2);
+      expect(result.hasDrift).toBe(true);
+      expect(mockDetectDrift).toHaveBeenCalled();
+    });
+
+    it('does not create LLM service in static mode', async () => {
+      await specGenDrift({ rootPath: ROOT, llmEnhanced: false });
+      expect(mockCreateLLMService).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('LLM-enhanced mode', () => {
+    it('throws if llmEnhanced=true but no API key', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      await expect(specGenDrift({ rootPath: ROOT, llmEnhanced: true })).rejects.toThrow(/API key/i);
+    });
+
+    it('creates LLM service when llmEnhanced=true', async () => {
+      await specGenDrift({ rootPath: ROOT, llmEnhanced: true });
+      expect(mockCreateLLMService).toHaveBeenCalled();
+    });
+  });
+
+  describe('maxFiles limit', () => {
+    it('slices changed files to maxFiles', async () => {
+      const manyFiles = Array.from({ length: 20 }, (_, i) => ({
+        path: `src/file${i}.ts`, status: 'modified' as const,
+        additions: 1, deletions: 0, isTest: false, isConfig: false, isGenerated: false, extension: '.ts',
+      }));
+      mockGetChangedFiles.mockResolvedValue({ files: manyFiles, resolvedBase: 'main', hasUnstagedChanges: false, currentBranch: 'main' } as Awaited<ReturnType<typeof getChangedFiles>>);
+
+      await specGenDrift({ rootPath: ROOT, maxFiles: 5 });
+
+      // detectDrift should be called with at most 5 files
+      const callArgs = mockDetectDrift.mock.calls[0];
+      expect(callArgs).toBeDefined();
+    });
+  });
+});

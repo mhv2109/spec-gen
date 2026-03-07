@@ -15,6 +15,7 @@ import { verifyCommand } from './commands/verify.js';
 import { driftCommand } from './commands/drift.js';
 import { runCommand } from './commands/run.js';
 import { mcpCommand } from './commands/mcp.js';
+import { viewCommand } from './commands/view.js';
 import { configureLogger } from '../utils/logger.js';
 
 const program = new Command();
@@ -34,15 +35,18 @@ program
   .name('spec-gen')
   .description(
     'Reverse-engineer OpenSpec specifications from existing codebases.\n\n' +
-    'Philosophy: "Archaeology over Creativity" — We extract the truth of what\n' +
-    'code does, grounded in static analysis, not LLM hallucinations.'
+      'Philosophy: "Archaeology over Creativity" — We extract the truth of what\n' +
+      'code does, grounded in static analysis, not LLM hallucinations.'
   )
   .version('1.0.0')
   .option('-q, --quiet', 'Minimal output (errors only)', false)
   .option('-v, --verbose', 'Show debug information', false)
   .option('--no-color', 'Disable colored output (also enables timestamps)')
   .option('--config <path>', 'Path to config file', '.spec-gen/config.json')
-  .option('--api-base <url>', 'Custom LLM API base URL (for local/enterprise OpenAI-compatible servers)')
+  .option(
+    '--api-base <url>',
+    'Custom LLM API base URL (for local/enterprise OpenAI-compatible servers)'
+  )
   .option('--insecure', 'Disable SSL certificate verification (for internal/self-signed certs)')
   .addHelpText(
     'after',
@@ -50,6 +54,7 @@ program
 Workflow:
   1. spec-gen init      Detect project type, create config
   2. spec-gen analyze   Scan codebase, build dependency graph
+  3. spec-gen view      Review visually the dependency graph
   3. spec-gen generate  Create OpenSpec files using LLM
   4. spec-gen verify    Validate specs against source code
   5. spec-gen drift     Detect when code outpaces specs
@@ -58,6 +63,7 @@ Quick start:
   $ cd your-project
   $ spec-gen init
   $ spec-gen analyze
+  $ spec-gen view
   $ spec-gen generate
 
 Or run the full pipeline at once:
@@ -86,5 +92,6 @@ program.addCommand(verifyCommand);
 program.addCommand(driftCommand);
 program.addCommand(runCommand);
 program.addCommand(mcpCommand);
+program.addCommand(viewCommand);
 
 program.parse();

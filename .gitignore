@@ -173,4 +173,9 @@ test-results/
 # --------------------
 .fastembed_cache/
 */.fastembed_cache/
+.kilocode/
+.vibe/
 result
+docker/
+docker-compose.yml
+ARCHITECTURE.md

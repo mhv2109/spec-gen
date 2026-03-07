@@ -1,0 +1,377 @@
+/**
+ * spec-gen view command
+ *
+ * Starts a local React (Vite) server to visualize analysis graphs,
+ * then opens the user's browser.
+ */
+
+import { Command } from 'commander';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'vite';
+import react from '@vitejs/plugin-react';
+import { join, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { logger } from '../../utils/logger.js';
+import { VectorIndex } from '../../core/analyzer/vector-index.js';
+import { EmbeddingService } from '../../core/analyzer/embedding-service.js';
+import { getSkeletonContent, detectLanguage } from '../../core/analyzer/code-shaper.js';
+
+function openBrowser(url: string): void {
+  const platform = process.platform;
+  const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'cmd' : 'xdg-open';
+
+  const args = platform === 'win32' ? ['/c', 'start', '', url] : [url];
+
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+  child.unref();
+}
+
+export const viewCommand = new Command('view')
+  .description('Start an interactive graph viewer (React) for .spec-gen/analysis')
+  .option('--analysis <path>', 'Path to analysis directory', '.spec-gen/analysis/')
+  .option('--spec <path>', 'Path to spec files directory', './openspec/specs/')
+  .option('--port <n>', 'Port to run the viewer on', '5173')
+  .option('--host <host>', 'Host to bind (use 0.0.0.0 for LAN)', '127.0.0.1')
+  .option('--no-open', 'Do not open the browser automatically', false)
+  .action(
+    async (options: {
+      analysis: string;
+      spec: string;
+      port: string;
+      host: string;
+      open: boolean;
+    }) => {
+      const rootPath = process.cwd();
+      const analysisDir = resolve(rootPath, options.analysis);
+      const graphPath = join(analysisDir, 'dependency-graph.json');
+      const llmContextPath = join(analysisDir, 'llm-context.json');
+      const refactorPath = join(analysisDir, 'refactor-priorities.json');
+      const mappingPath = join(analysisDir, 'mapping.json');
+      const specDir = resolve(rootPath, options.spec);
+
+      if (!existsSync(graphPath)) {
+        logger.error(`Missing graph file: ${graphPath}`);
+        logger.info('Tip', 'Run "spec-gen analyze" first (or pass --analysis)');
+        process.exitCode = 1;
+        return;
+      }
+
+      const here = fileURLToPath(new URL('.', import.meta.url));
+      const candidateA = resolve(join(here, '../../viewer/app')); // when running from src/cli/commands
+      const candidateB = resolve(join(here, '../../../src/viewer/app')); // when running from dist/cli/commands
+      const viewerRoot = existsSync(join(candidateA, 'index.html')) ? candidateA : candidateB;
+
+      if (!existsSync(join(viewerRoot, 'index.html'))) {
+        logger.error(
+          `Viewer assets not found (expected index.html). Tried: ${candidateA} and ${candidateB}`
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      const port = Number.parseInt(options.port, 10) || 5173;
+      const host = options.host || '127.0.0.1';
+
+      logger.section('Starting Graph Viewer');
+      logger.info('Analysis', analysisDir);
+      logger.info('Graph', graphPath);
+
+      const server = await createServer({
+        root: viewerRoot,
+        logLevel: 'error',
+        plugins: [
+          react(),
+          {
+            name: 'spec-gen-graph-api',
+            configureServer(devServer) {
+              devServer.middlewares.use('/api/dependency-graph', async (_req, res) => {
+                try {
+                  const json = await readFile(graphPath, 'utf-8');
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(json);
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/llm-context', async (_req, res) => {
+                try {
+                  if (!existsSync(llmContextPath)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'llm-context.json not found' }));
+                    return;
+                  }
+                  const json = await readFile(llmContextPath, 'utf-8');
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(json);
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/refactor-priorities', async (_req, res) => {
+                try {
+                  if (!existsSync(refactorPath)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'refactor-priorities.json not found' }));
+                    return;
+                  }
+                  const json = await readFile(refactorPath, 'utf-8');
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(json);
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/mapping', async (_req, res) => {
+                try {
+                  if (!existsSync(mappingPath)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'mapping.json not found' }));
+                    return;
+                  }
+                  const json = await readFile(mappingPath, 'utf-8');
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(json);
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/spec', async (_req, res) => {
+                try {
+                  if (!existsSync(specDir)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'spec directory not found' }));
+                    return;
+                  }
+
+                  // Recursively read all spec files and concatenate them
+                  const { readdirSync, statSync } = await import('node:fs');
+
+                  const collectSpecFiles = (dir: string): string[] => {
+                    const files: string[] = [];
+                    try {
+                      const entries = readdirSync(dir);
+                      for (const entry of entries) {
+                        if (entry.startsWith('.')) continue;
+                        const fullPath = join(dir, entry);
+                        const stat = statSync(fullPath);
+                        if (stat.isDirectory()) {
+                          files.push(...collectSpecFiles(fullPath));
+                        } else if (entry.endsWith('.md')) {
+                          files.push(fullPath);
+                        }
+                      }
+                    } catch {
+                      // ignore errors in subdirectories
+                    }
+                    return files;
+                  };
+
+                  const specFiles = collectSpecFiles(specDir).sort();
+                  let combinedSpec = '';
+
+                  for (const filePath of specFiles) {
+                    try {
+                      const content = await readFile(filePath, 'utf-8');
+                      combinedSpec += content + '\n\n';
+                    } catch {
+                      // skip files that can't be read
+                    }
+                  }
+
+                  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(combinedSpec);
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/spec-requirements', async (_req, res) => {
+                try {
+                  if (!existsSync(mappingPath)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'mapping.json not found' }));
+                    return;
+                  }
+
+                  // Read mapping to get spec file references
+                  const mappingContent = await readFile(mappingPath, 'utf-8');
+                  const mapping = JSON.parse(mappingContent);
+
+                  // We'll build a requirements object keyed by the exact mapping.requirement value.
+                  // For each mapping entry we read the exact specFile referenced and extract the
+                  // Requirement block whose title matches the mapping.requirement (case-insensitive).
+                  const requirements: Record<
+                    string,
+                    {
+                      title: string;
+                      body: string;
+                      specFile?: string;
+                      domain?: string;
+                      service?: string;
+                    }
+                  > = {};
+
+                  for (const m of mapping.mappings || []) {
+                    const reqName = m.requirement;
+                    const specFileRel = m.specFile;
+                    if (!specFileRel || !reqName) continue;
+
+                    const specFileAbs = resolve(rootPath, specFileRel);
+                    if (!existsSync(specFileAbs)) continue;
+
+                    try {
+                      const content = await readFile(specFileAbs, 'utf-8');
+
+                      // Split into Requirement sections and find the one that matches reqName exactly
+                      // We will compare titles case-insensitively but otherwise match the title text directly.
+                      const sections = content.split(/^#{3,4}\s+Requirement:\s*/m);
+                      let found = false;
+                      for (let i = 1; i < sections.length; i++) {
+                        const lines = sections[i].split('\n');
+                        const rawTitle = lines[0].trim();
+                        if (rawTitle.length === 0) continue;
+
+                        // Deterministic match: case-insensitive equality
+                        if (rawTitle.toLowerCase() === reqName.toLowerCase()) {
+                          const body = lines.slice(1).join('\n').trim();
+                          requirements[reqName] = {
+                            title: rawTitle,
+                            body,
+                            specFile: specFileRel,
+                            domain: m.domain,
+                            service: m.service,
+                          };
+                          found = true;
+                          break;
+                        }
+                      }
+
+                      // If not found by exact-title match, do not attempt fuzzy heuristics.
+                      // Instead, add an empty placeholder so the client knows we attempted to load it.
+                      if (!found) {
+                        requirements[reqName] = {
+                          title: reqName,
+                          body: '',
+                          specFile: specFileRel,
+                          domain: m.domain,
+                          service: m.service,
+                        };
+                      }
+                    } catch {
+                      // If file cannot be read, store a missing placeholder
+                      requirements[m.requirement] = {
+                        title: m.requirement,
+                        body: '',
+                        specFile: specFileRel,
+                        domain: m.domain,
+                        service: m.service,
+                      };
+                    }
+                  }
+
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(JSON.stringify(requirements));
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/skeleton', async (req, res) => {
+                try {
+                  const url = new URL(req.url ?? '', 'http://localhost');
+                  const file = url.searchParams.get('file')?.trim() ?? '';
+                  if (!file) {
+                    res.statusCode = 400;
+                    res.end(JSON.stringify({ error: 'Missing ?file=' }));
+                    return;
+                  }
+                  const absFile = join(rootPath, file);
+                  const source = await readFile(absFile, 'utf-8');
+                  const language = detectLanguage(file);
+                  const skeleton = getSkeletonContent(source, language);
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(JSON.stringify({
+                    filePath: file,
+                    language,
+                    originalLines: source.split('\n').length,
+                    skeletonLines: skeleton.split('\n').length,
+                    reductionPct: Math.round((1 - skeleton.length / source.length) * 100),
+                    skeleton,
+                  }));
+                } catch (err) {
+                  res.statusCode = 404;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+
+              devServer.middlewares.use('/api/search', async (req, res) => {
+                try {
+                  const url = new URL(req.url ?? '', 'http://localhost');
+                  const q = url.searchParams.get('q')?.trim() ?? '';
+                  if (!q) {
+                    res.statusCode = 400;
+                    res.end(JSON.stringify({ error: 'Missing query parameter ?q=' }));
+                    return;
+                  }
+                  if (!VectorIndex.exists(analysisDir)) {
+                    res.statusCode = 404;
+                    res.end(JSON.stringify({ error: 'No vector index found. Run spec-gen analyze --embed first.' }));
+                    return;
+                  }
+                  const embedSvc = EmbeddingService.fromEnv();
+                  const results = await VectorIndex.search(analysisDir, q, embedSvc, { limit: 5 });
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.statusCode = 200;
+                  res.end(JSON.stringify(results.map(r => ({
+                    id: r.record.id,
+                    name: r.record.name,
+                    filePath: r.record.filePath,
+                    language: r.record.language,
+                    score: r.score,
+                  }))));
+                } catch (err) {
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ error: (err as Error).message }));
+                }
+              });
+            },
+          },
+        ],
+        server: {
+          port,
+          host,
+          strictPort: true,
+        },
+      });
+
+      await server.listen();
+
+      const url = `http://${host}:${port}/`;
+      logger.success(`Viewer running at ${url}`);
+
+      if (options.open) {
+        openBrowser(url);
+      }
+
+      // Vite keeps the event loop alive; nothing else to do here.
+    }
+  );

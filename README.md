@@ -456,6 +456,8 @@ spec-gen analyze [options]
   --max-files <n>        # Max files (default: 500)
   --include <glob>       # Additional include patterns
   --exclude <glob>       # Additional exclude patterns
+  --force                # Force re-analysis (bypass 1-hour cache)
+  --embed                # Build semantic vector index after analysis (requires embedding config)
 ```
 
 ### Verify Options
@@ -608,6 +610,10 @@ All tools run on **pure static analysis** — no LLM quota consumed.
 | Tool | Description | Requires prior analysis |
 |------|-------------|:---:|
 | `get_subgraph` | Depth-limited subgraph centred on a function. Direction: `downstream` (what it calls), `upstream` (who calls it), or `both`. Output as JSON or Mermaid diagram. | Yes |
+| `get_architecture_overview` | High-level cluster map: roles (entry layer, orchestrator, core utilities, API layer, internal), inter-cluster dependencies, global entry points, and critical hubs. No LLM required. | Yes |
+| `get_function_skeleton` | Noise-stripped view of a source file: logs, inline comments, and non-JSDoc block comments removed. Signatures, control flow, return/throw, and call expressions preserved. Returns reduction %. | No |
+| `suggest_insertion_points` | Semantic search over the vector index to find the best existing functions to extend or hook into when implementing a new feature. Returns ranked candidates with role and strategy. | Yes (+ `--embed`) |
+| `search_code` | Natural-language semantic search over indexed functions. Returns the closest matches by meaning with similarity score. Useful for navigating unfamiliar codebases. | Yes (+ `--embed`) |
 
 **Specs**
 
@@ -695,6 +701,33 @@ limit      number   Max hubs to return (default: 10)
 minFanIn   number   Minimum fan-in threshold to be considered a hub (default: 3)
 ```
 
+**`get_architecture_overview`**
+```
+directory  string   Absolute path to the project directory
+```
+
+**`get_function_skeleton`**
+```
+directory  string   Absolute path to the project directory
+filePath   string   Path to the file, relative to the project directory
+```
+
+**`suggest_insertion_points`**
+```
+directory  string   Absolute path to the project directory
+query      string   Natural-language description of the feature to implement
+limit      number   Max candidates to return (default: 5)
+```
+
+**`search_code`**
+```
+directory  string   Absolute path to the project directory
+query      string   Natural-language query, e.g. "authenticate user with JWT"
+limit      number   Max results (default: 10)
+language   string   Filter by language: "TypeScript" | "Python" | "Go" | …
+minFanIn   number   Only return functions with at least this many callers
+```
+
 ### Typical workflow
 
 **Scenario A — Initial exploration**
@@ -740,15 +773,28 @@ spec-gen view --analysis <path>    # custom analysis dir (default: .spec-gen/ana
 spec-gen view --spec <path>        # custom spec dir (default: ./openspec/specs/)
 ```
 
-### What the viewer shows
+### Views
 
-| Panel | Content |
-|-------|---------|
-| **Graph** | Interactive force-directed dependency graph with cluster grouping |
-| **Refactor** | Refactoring priorities overlaid on the graph (god functions, SRP violations, cycles) |
-| **Spec** | Requirements linked to the selected file — body, domain, confidence, service |
-| **Info** | File metadata: exports, metrics, imports/exports, blast radius |
-| **Clusters** | Colour-coded architectural clusters |
+| View | Description |
+|------|-------------|
+| **Clusters** | Colour-coded architectural clusters with expandable member nodes |
+| **Flat** | Force-directed dependency graph (all nodes) |
+| **Architecture** | High-level cluster map: role-coloured boxes, inter-cluster dependency arrows |
+
+### Right panel tabs (select a node to activate)
+
+| Tab | Content |
+|-----|---------|
+| **Node** | File metadata: exports, language, score |
+| **Links** | Direct callers and callees |
+| **Blast** | Downstream impact radius |
+| **Spec** | Requirements linked to the selected file — body, domain, confidence |
+| **Skeleton** | Noise-stripped source: logs and comments removed, structure preserved |
+| **Info** | Global stats and top-ranked files |
+
+### Search
+
+The search bar filters all three views simultaneously (text match on name, path, exports, tags). If a vector index was built with `--embed`, typing ≥ 3 characters also queries the semantic index and shows the top 5 function matches in a dropdown.
 
 ### Automatic data loading
 
@@ -757,11 +803,14 @@ The viewer auto-loads all available data on startup:
 | Endpoint | Source | Required? |
 |----------|--------|-----------|
 | `/api/dependency-graph` | `.spec-gen/analysis/dependency-graph.json` | Yes |
-| `/api/refactor-report` | `.spec-gen/analysis/refactor-priorities.json` | No |
+| `/api/llm-context` | `.spec-gen/analysis/llm-context.json` | No |
+| `/api/refactor-priorities` | `.spec-gen/analysis/refactor-priorities.json` | No |
 | `/api/mapping` | `.spec-gen/analysis/mapping.json` | No |
 | `/api/spec-requirements` | `openspec/specs/**/*.md` + `mapping.json` | No |
+| `/api/skeleton?file=` | Source file on disk | No |
+| `/api/search?q=` | `.spec-gen/analysis/vector-index/` | No (`--embed`) |
 
-Run `spec-gen generate` to produce `mapping.json` and the spec files. Once present, the SPEC tab shows the full requirement body for each file selected in the graph.
+Run `spec-gen generate` to produce `mapping.json` and the spec files. Once present, the **Spec** tab shows the full requirement body for each selected file.
 
 ### View Options
 
@@ -802,12 +851,45 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 |------|-------------|
 | `repo-structure.json` | Project structure and metadata |
 | `dependency-graph.json` | Import/export relationships |
-| `llm-context.json` | Context prepared for LLM |
+| `llm-context.json` | Context prepared for LLM (signatures, call graph) |
 | `dependencies.mermaid` | Visual dependency graph |
 | `SUMMARY.md` | Human-readable analysis summary |
 | `call-graph.json` | Function-level call graph (7 languages) |
 | `refactor-priorities.json` | Refactoring issues by file and function |
 | `mapping.json` | Requirement→function mapping (produced by `generate`) |
+| `vector-index/` | LanceDB semantic index (produced by `--embed`) |
+
+`spec-gen analyze` also writes **`ARCHITECTURE.md`** to your project root — a Markdown overview of module clusters, entry points, and critical hubs, refreshed on every run.
+
+## Semantic Search
+
+`spec-gen analyze --embed` builds a vector index over all functions in the call graph, enabling natural-language search via the `search_code` and `suggest_insertion_points` MCP tools, and the search bar in the viewer.
+
+### Embedding configuration
+
+Provide an OpenAI-compatible embedding endpoint (Ollama, OpenAI, Mistral, etc.) via environment variables or `.spec-gen/config.json`:
+
+**Environment variables:**
+```bash
+EMBED_BASE_URL=https://api.openai.com/v1
+EMBED_MODEL=text-embedding-3-small
+EMBED_API_KEY=sk-...         # optional for local servers
+
+# Then run:
+spec-gen analyze --embed
+```
+
+**Config file (`.spec-gen/config.json`):**
+```json
+{
+  "embedding": {
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "nomic-embed-text"
+  }
+}
+```
+
+The index is stored in `.spec-gen/analysis/vector-index/` and is automatically used by the viewer's search bar and the `search_code` / `suggest_insertion_points` MCP tools.
 
 ## Configuration
 

@@ -31,10 +31,6 @@
     "test:openspec-compat": "vitest run --grep 'openspec' || echo 'No OpenSpec compat tests yet'",
     "test:e2e": "vitest run --grep 'e2e' || echo 'No E2E tests yet'",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "embed:up": "docker compose up -d embedding-server",
-    "embed:down": "docker compose down embedding-server",
-    "embed:build": "docker compose build embedding-server",
-    "embed:logs": "docker compose logs -f embedding-server",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm run test:run"

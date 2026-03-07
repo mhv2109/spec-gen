@@ -129,6 +129,21 @@ Identify low-risk leaf functions that can be extracted first (bottom-up).
 Cross-reference with the subgraph from Step 5: a candidate is a good first
 extraction if it already appears as a callee of the target function.
 
+## Step 6b: Find insertion points for extracted helpers
+
+Before designing the change sequence, identify where extracted functions should land.
+This avoids creating helpers in the wrong file or layer.
+
+<use_mcp_tool>
+  <server_name>spec-gen</server_name>
+  <tool_name>suggest_insertion_points</tool_name>
+  <arguments>{"directory": "$DIRECTORY", "query": "extract helper from $FUNCTION_NAME", "limit": 5}</arguments>
+</use_mcp_tool>
+
+For each candidate returned, note its role (entry_point / orchestrator / hub / utility / internal)
+and the suggested strategy. Cross-reference with the subgraph from Step 5: prefer candidates
+that already call into — or are called by — the target function.
+
 ## Step 7: Design the change sequence
 
 Based on the recommended strategy from Step 4, design an ordered sequence of

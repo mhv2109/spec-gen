@@ -18,6 +18,25 @@ import { VectorIndex } from '../../core/analyzer/vector-index.js';
 import { EmbeddingService } from '../../core/analyzer/embedding-service.js';
 import { getSkeletonContent, detectLanguage } from '../../core/analyzer/code-shaper.js';
 
+const MAX_QUERY_LENGTH = 1000;
+
+/** Strip internal filesystem paths from error messages before sending to clients. */
+function sanitizeErrorMessage(msg: string): string {
+  return msg
+    .replace(/\/Users\/[^\s:]+/g, '[path]')
+    .replace(/\/home\/[^\s:]+/g, '[path]')
+    .replace(/[A-Z]:\\[^\s:]+/g, '[path]');
+}
+
+/** Ensure a resolved path stays within the project root. Returns null if invalid. */
+function safePath(rootPath: string, userPath: string): string | null {
+  const abs = resolve(rootPath, userPath);
+  if (!abs.startsWith(resolve(rootPath) + '/') && abs !== resolve(rootPath)) {
+    return null;
+  }
+  return abs;
+}
+
 function openBrowser(url: string): void {
   const platform = process.platform;
   const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'cmd' : 'xdg-open';
@@ -94,7 +113,7 @@ export const viewCommand = new Command('view')
                   res.end(json);
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -111,7 +130,7 @@ export const viewCommand = new Command('view')
                   res.end(json);
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -128,7 +147,7 @@ export const viewCommand = new Command('view')
                   res.end(json);
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -145,7 +164,7 @@ export const viewCommand = new Command('view')
                   res.end(json);
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -197,7 +216,7 @@ export const viewCommand = new Command('view')
                   res.end(combinedSpec);
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -232,8 +251,8 @@ export const viewCommand = new Command('view')
                     const specFileRel = m.specFile;
                     if (!specFileRel || !reqName) continue;
 
-                    const specFileAbs = resolve(rootPath, specFileRel);
-                    if (!existsSync(specFileAbs)) continue;
+                    const specFileAbs = safePath(rootPath, specFileRel);
+                    if (!specFileAbs || !existsSync(specFileAbs)) continue;
 
                     try {
                       const content = await readFile(specFileAbs, 'utf-8');
@@ -290,7 +309,7 @@ export const viewCommand = new Command('view')
                   res.end(JSON.stringify(requirements));
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -303,7 +322,12 @@ export const viewCommand = new Command('view')
                     res.end(JSON.stringify({ error: 'Missing ?file=' }));
                     return;
                   }
-                  const absFile = join(rootPath, file);
+                  const absFile = safePath(rootPath, file);
+                  if (!absFile) {
+                    res.statusCode = 403;
+                    res.end(JSON.stringify({ error: 'Access denied: path outside project' }));
+                    return;
+                  }
                   const source = await readFile(absFile, 'utf-8');
                   const language = detectLanguage(file);
                   const skeleton = getSkeletonContent(source, language);
@@ -319,7 +343,7 @@ export const viewCommand = new Command('view')
                   }));
                 } catch (err) {
                   res.statusCode = 404;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
 
@@ -330,6 +354,11 @@ export const viewCommand = new Command('view')
                   if (!q) {
                     res.statusCode = 400;
                     res.end(JSON.stringify({ error: 'Missing query parameter ?q=' }));
+                    return;
+                  }
+                  if (q.length > MAX_QUERY_LENGTH) {
+                    res.statusCode = 400;
+                    res.end(JSON.stringify({ error: `Query too long (max ${MAX_QUERY_LENGTH} chars)` }));
                     return;
                   }
                   if (!VectorIndex.exists(analysisDir)) {
@@ -350,7 +379,7 @@ export const viewCommand = new Command('view')
                   }))));
                 } catch (err) {
                   res.statusCode = 500;
-                  res.end(JSON.stringify({ error: (err as Error).message }));
+                  res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
                 }
               });
             },

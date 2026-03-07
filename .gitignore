@@ -179,3 +179,4 @@ result
 docker/
 docker-compose.yml
 ARCHITECTURE.md
+openspec/

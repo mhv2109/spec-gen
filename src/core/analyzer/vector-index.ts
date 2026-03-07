@@ -200,6 +200,11 @@ export class VectorIndex {
     }
 
     const dbPath = join(outputDir, DB_FOLDER);
+    if (!VectorIndex.exists(outputDir)) {
+      throw new Error(
+        'Vector index not found. Run "spec-gen analyze --embed" first.'
+      );
+    }
     const db = await connect(dbPath);
     const table = await db.openTable(TABLE_NAME);
 

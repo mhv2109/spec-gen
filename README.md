@@ -154,6 +154,13 @@ graph TD
             DD -.->|optional| LE[LLM Enhancer]
         end
 
+        subgraph Chat["Chat & Graph"]
+            CHAT[Chat Agent]
+            MCP[MCP Server]
+            GRAPH[Graph Tools]
+            SEM[Semantic Tools]
+        end
+
         LLM[LLM Service -- Anthropic / OpenAI / Compatible]
     end
 
@@ -172,6 +179,21 @@ graph TD
 
     AG -->|analysis artifacts| SP
     AG -->|analysis artifacts| VE
+    AG -->|call graph, vector index| Chat
+
+    MCP --> CHAT
+    CHAT --> GRAPH & SEM
+    GRAPH --> DG
+    SEM -->|VectorIndex| Analyze
+
+    subgraph Viewer["Interactive Graph Viewer"]
+        VIEW[React Viewer]
+        VIEW_PANEL[Chat Panel]
+    end
+
+    MCP -.->|MCP protocol| VIEW
+    VIEW -->|http/api| MCP
+    VIEW_PANEL --> CHAT
 
     subgraph Output["Output"]
         SPECS[openspec/specs/*.md]
@@ -650,6 +672,8 @@ maxDepth      number   BFS traversal depth limit  (default: 3)
 format        string   "json" | "mermaid"  (default: "json")
 ```
 
+*Note: `analyze_impact` and `get_subgraph` will fall back to semantic search (if a vector index is available) when no exact name match is found.*
+
 **`get_mapping`**
 ```
 directory    string    Absolute path to the project directory
@@ -678,6 +702,8 @@ directory  string   Absolute path to the project directory
 symbol     string   Function or method name (exact or partial match)
 depth      number   Traversal depth for upstream/downstream chains (default: 2)
 ```
+
+*Note: `analyze_impact` and `get_subgraph` will fall back to semantic search (if a vector index is available) when no exact name match is found.*
 
 **`get_low_risk_refactor_candidates`**
 ```
@@ -779,7 +805,25 @@ spec-gen view --spec <path>        # custom spec dir (default: ./openspec/specs/
 |------|-------------|
 | **Clusters** | Colour-coded architectural clusters with expandable member nodes |
 | **Flat** | Force-directed dependency graph (all nodes) |
-| **Architecture** | High-level cluster map: role-coloured boxes, inter-cluster dependency arrows |
+
+The **Clusters** view also has an "Architecture" mode button that hides node details and shows only cluster-level dependencies for a high-level overview.
+
+### Chat integration
+
+The viewer includes a **Diagram Chat** panel (right sidebar) that lets you ask questions about your codebase in natural language. The chat agent has access to all analysis tools and can:
+
+- Find critical functions and analyze impact
+- Suggest where to add new features
+- Search code semantically
+- Highlight relevant nodes in the graph
+- Auto-expand clusters containing highlighted nodes
+
+Type `/` in the chat to see available slash commands, or ask questions like:
+- "What are the most critical functions?"
+- "Where would I add a new API endpoint?"
+- "Show me the impact of changing the authentication service?"
+
+The chat uses your configured LLM provider (set via `spec-gen config` or environment variables).
 
 ### Right panel tabs (select a node to activate)
 

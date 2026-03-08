@@ -175,8 +175,11 @@ export function ChatPanel({ onHighlight, onClose }) {
   useEffect(() => {
     fetch('/api/chat/models')
       .then((r) => r.json())
-      .then((data) => { if (!data.error) setModelInfo(data); })
-      .catch(() => {});
+      .then((data) => {
+        if (data.error) console.warn('[chat/models]', data.error);
+        else setModelInfo(data);
+      })
+      .catch((e) => console.warn('[chat/models] fetch failed:', e.message));
   }, []);
 
   useEffect(() => {

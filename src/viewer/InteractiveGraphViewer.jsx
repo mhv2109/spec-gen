@@ -13,6 +13,7 @@ import { ClusterGraph } from './components/ClusterGraph.jsx';
 import { FilterBar } from './components/FilterBar.jsx';
 import { ArchitectureView } from './components/ArchitectureView.jsx';
 import { Hint, SL, Row, Chip, KindBadge } from './components/MicroComponents.jsx';
+import { ChatPanel } from './components/ChatPanel.jsx';
 
 export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '/api/spec' }) {
   const [graph, setGraph] = useState(null);
@@ -40,6 +41,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
     refactorOnly: false,
   });
   const [loaded, setLoaded] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const fileRef = useRef();
   const hasAutoLoadedRef = useRef(false);
 
@@ -258,6 +260,37 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [clearSelection]);
+
+  // Auto-expand clusters when their nodes are highlighted by the chatbot
+  useEffect(() => {
+    if (!graph || focusedIds.length === 0) return;
+    
+    const clusterIdsToExpand = new Set();
+    const validNodeIds = [];
+    focusedIds.forEach((fid) => {
+      const node = graph.nodes.find((n) => n.id === fid);
+      if (node) {
+        if (node.cluster?.id) clusterIdsToExpand.add(node.cluster.id);
+        validNodeIds.push(fid);
+      }
+    });
+    
+    if (clusterIdsToExpand.size > 0) {
+      setExpandedClusters((prev) => {
+        const next = new Set(prev);
+        clusterIdsToExpand.forEach((cid) => next.add(cid));
+        return next;
+      });
+    }
+
+    // Select the first highlighted node to show details and prominent highlight
+    if (validNodeIds.length > 0) {
+      const id = validNodeIds[0];
+      setSelectedId(id);
+      setAffectedIds(computeBlast(visibleEdges, id));
+      setTab(mapping ? 'spec' : 'node');
+    }
+  }, [focusedIds, graph, visibleEdges, mapping, computeBlast]);
 
   const selectedNode = graph?.nodes.find((n) => n.id === selectedId);
 
@@ -627,6 +660,23 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
         >
           {Object.keys(specReqs).length ? '✓ SPEC' : 'SPEC'}
         </button>
+        <button
+          onClick={() => setChatOpen((v) => !v)}
+          style={{
+            background: chatOpen ? '#1a1050' : 'none',
+            border: `1px solid ${chatOpen ? '#7c6af7' : '#1a1f38'}`,
+            borderRadius: 4,
+            color: chatOpen ? '#7c6af7' : '#3a3f5c',
+            fontSize: 8,
+            padding: '3px 8px',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            letterSpacing: '0.06em',
+          }}
+          title="Toggle AI chat"
+        >
+          ✦ CHAT
+        </button>
         <input
           ref={mappingRef}
           type="file"
@@ -723,6 +773,14 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
             </div>
           )}
         </div>
+
+        {/* Chat panel */}
+        {chatOpen && (
+          <ChatPanel
+            onHighlight={(ids) => setFocusedIds(ids)}
+            onClose={() => { setChatOpen(false); setFocusedIds([]); }}
+          />
+        )}
 
         {/* Side panel */}
         <div

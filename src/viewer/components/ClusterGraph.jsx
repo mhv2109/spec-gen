@@ -274,11 +274,13 @@ export function ClusterGraph({
           return (
             <g key={cl.id}>
               {(() => {
-                const clusterLinked =
-                  linkedIds.size > 0 && allMembers.some((n) => linkedIds.has(n.id));
-                const hasFocused = focusedIds?.length > 0;
-                const clusterFocused = hasFocused && allMembers.some((n) => focusedIds.includes(n.id));
-                const isClusterGreyed = (visibleMembers.length === 0 && !clusterLinked) || (hasFocused && !clusterFocused && !clusterLinked);
+                 const clusterLinked =
+                   linkedIds.size > 0 && allMembers.some((n) => linkedIds.has(n.id));
+                 const hasFocused = focusedIds?.length > 0;
+                 const clusterFocused = hasFocused && allMembers.some((n) => focusedIds.includes(n.id));
+                 const isClusterGreyed = 
+                   (hasFocused && !clusterFocused && !clusterLinked) ||
+                   (!hasFocused && visibleMembers.length === 0 && !clusterLinked);
                 const isLinkedCollapsed = clusterLinked && !isExpanded;
                 return (
                   <g
@@ -349,11 +351,17 @@ export function ClusterGraph({
                 allMembers.map((n) => {
                   const np = nodeLayouts[cl.id]?.[n.id];
                   if (!np) return null;
-                  const isSel = n.id === selectedId;
-                  const isAff = affectedIds.includes(n.id);
-                  const col = extColor(n.ext);
-                  const isGreyed = (!visibleIds.has(n.id) && !linkedIds.has(n.id)) ||
-                    (focusedIds?.length > 0 && !focusedIds.includes(n.id) && !linkedIds.has(n.id));
+                   const isSel = n.id === selectedId;
+                   const isAff = affectedIds.includes(n.id);
+                   const col = extColor(n.ext);
+                   const isInFocused = focusedIds?.includes(n.id) || false;
+                   const isLinked = linkedIds.has(n.id);
+                   const hasFocused = focusedIds?.length > 0;
+                   const isVisible = visibleIds.has(n.id);
+                   const isGreyed = !isInFocused && (
+                     (hasFocused && !isLinked) ||
+                     (!hasFocused && !isVisible && !isLinked)
+                   );
                   return (
                     <g
                       key={n.id}

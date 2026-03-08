@@ -650,6 +650,8 @@ maxDepth      number   BFS traversal depth limit  (default: 3)
 format        string   "json" | "mermaid"  (default: "json")
 ```
 
+*Note: If no exact name match is found, `get_subgraph` falls back to semantic search (when a vector index is available) to find the most similar function.*
+
 **`get_mapping`**
 ```
 directory    string    Absolute path to the project directory
@@ -678,6 +680,8 @@ directory  string   Absolute path to the project directory
 symbol     string   Function or method name (exact or partial match)
 depth      number   Traversal depth for upstream/downstream chains (default: 2)
 ```
+
+*Note: If no exact name match is found, `analyze_impact` falls back to semantic search (when a vector index is available) to find the most similar function.*
 
 **`get_low_risk_refactor_candidates`**
 ```
@@ -780,6 +784,22 @@ spec-gen view --spec <path>        # custom spec dir (default: ./openspec/specs/
 | **Clusters** | Colour-coded architectural clusters with expandable member nodes |
 | **Flat** | Force-directed dependency graph (all nodes) |
 | **Architecture** | High-level cluster map: role-coloured boxes, inter-cluster dependency arrows |
+
+### Diagram Chat
+
+The right sidebar includes a **Diagram Chat** panel powered by an LLM agent. The chat can access all analysis tools and interact with the graph:
+
+- Ask questions about your codebase in natural language
+- Graph functions and requirements mentioned in answers are automatically highlighted
+- Clusters containing highlighted nodes auto-expand to reveal the nodes
+- Select a node in the chat to view its details tab
+
+Example queries:
+- "What are the most critical functions?"
+- "Where would I add a new API endpoint?"
+- "Show me the impact of changing the authentication service"
+
+The chat uses the LLM provider configured via `spec-gen config` or environment variables. No API key is needed for viewer-only operations (the chat agent runs locally via MCP).
 
 ### Right panel tabs (select a node to activate)
 

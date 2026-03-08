@@ -145,7 +145,7 @@ export async function specGenGenerate(options: GenerateApiOptions = {}): Promise
 
   // Apply SSL verification setting
   const sslVerify = options.sslVerify ?? specGenConfig.llm?.sslVerify ?? true;
-  if (!sslVerify || specGenConfig.generation.skipSslVerify) {
+  if (!sslVerify || specGenConfig.generation.skipSslVerify || specGenConfig.embedding?.skipSslVerify) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   }
 

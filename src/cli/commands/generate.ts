@@ -452,7 +452,7 @@ Each spec.md follows OpenSpec conventions:
       const effectiveBaseUrl = process.env.OPENAI_COMPAT_BASE_URL ?? specGenConfig.generation.openaiCompatBaseUrl ?? rootConfig['openaiCompatBaseUrl'];
 
       // Apply SSL verification setting (CLI --insecure or config skipSslVerify)
-      if (globalOpts.insecure || specGenConfig.generation.skipSslVerify) {
+      if (globalOpts.insecure || specGenConfig.generation.skipSslVerify || specGenConfig.embedding?.skipSslVerify) {
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
         logger.warning('SSL verification disabled');
       }

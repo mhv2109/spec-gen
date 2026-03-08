@@ -33,6 +33,8 @@ export interface EmbeddingConfig {
   model: string;
   /** API key — optional for local servers */
   apiKey?: string;
+  /** Disable SSL certificate verification (e.g. self-signed certs on local servers) */
+  skipSslVerify?: boolean;
 }
 
 export interface AnalysisConfig {

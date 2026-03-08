@@ -27,6 +27,8 @@ export interface EmbeddingConfig {
   apiKey?: string;
   /** Maximum number of texts per API call (default: 64) */
   batchSize?: number;
+  /** Disable SSL certificate verification (e.g. self-signed certs on local servers) */
+  skipSslVerify?: boolean;
 }
 
 // ============================================================================
@@ -44,6 +46,9 @@ export class EmbeddingService {
     this.model = config.model;
     this.apiKey = config.apiKey ?? '';
     this.batchSize = config.batchSize ?? 64;
+    if (config.skipSslVerify && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    }
   }
 
   /**
@@ -59,6 +64,7 @@ export class EmbeddingService {
       baseUrl,
       model,
       apiKey: process.env.EMBED_API_KEY,
+      skipSslVerify: process.env.EMBED_SKIP_SSL_VERIFY === '1' || process.env.EMBED_SKIP_SSL_VERIFY === 'true',
     });
   }
 
@@ -72,6 +78,7 @@ export class EmbeddingService {
       baseUrl: cfg.embedding.baseUrl,
       model: cfg.embedding.model,
       apiKey: cfg.embedding.apiKey,
+      skipSslVerify: cfg.embedding.skipSslVerify,
     });
   }
 

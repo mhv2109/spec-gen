@@ -17,6 +17,7 @@ import { logger } from '../../utils/logger.js';
 import { VectorIndex } from '../../core/analyzer/vector-index.js';
 import { EmbeddingService } from '../../core/analyzer/embedding-service.js';
 import { getSkeletonContent, detectLanguage } from '../../core/analyzer/code-shaper.js';
+import { runChatAgent } from '../../core/services/chat-agent.js';
 
 const MAX_QUERY_LENGTH = 1000;
 
@@ -344,6 +345,85 @@ export const viewCommand = new Command('view')
                 } catch (err) {
                   res.statusCode = 404;
                   res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
+                }
+              });
+
+              devServer.middlewares.use('/api/chat', async (req, res) => {
+                if (req.method !== 'POST') {
+                  res.statusCode = 405;
+                  res.end(JSON.stringify({ error: 'Method not allowed' }));
+                  return;
+                }
+                try {
+                  // Collect body chunks
+                  const chunks: Buffer[] = [];
+                  await new Promise<void>((resolve, reject) => {
+                    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+                    req.on('end', resolve);
+                    req.on('error', reject);
+                  });
+                  const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {
+                    message: string;
+                    history?: { role: 'user' | 'assistant'; content: string }[];
+                  };
+
+                  if (!body.message || typeof body.message !== 'string') {
+                    res.statusCode = 400;
+                    res.end(JSON.stringify({ error: 'Missing "message" field' }));
+                    return;
+                  }
+
+                  const history = Array.isArray(body.history) ? body.history : [];
+
+                  // Build pathToNodeId from the dependency graph on-demand.
+                  // Raw dependency-graph.json nodes have the shape { id, file: { path } }.
+                  // Tool results return paths relative to rootPath or absolute — normalise both.
+                  const normalise = (p: string) =>
+                    p.startsWith(rootPath) ? p.slice(rootPath.length).replace(/^\/+/, '') : p.replace(/^\/+/, '');
+                  const pathToNodeId: Map<string, string> = new Map();
+                  try {
+                    const graphRaw = await readFile(graphPath, 'utf-8');
+                    const graph = JSON.parse(graphRaw) as {
+                      nodes?: Array<{ id?: string; file?: { path?: string } }>;
+                    };
+                    for (const n of graph.nodes ?? []) {
+                      if (!n.id || !n.file?.path) continue;
+                      pathToNodeId.set(normalise(n.file.path), n.id);
+                    }
+                  } catch { /* graph not available */ }
+
+                  // Use SSE so the client sees tool_start/tool_end events in real time.
+                  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+                  res.setHeader('Cache-Control', 'no-cache');
+                  res.setHeader('Connection', 'keep-alive');
+                  res.statusCode = 200;
+
+                  const sendEvent = (data: object) => {
+                    res.write(`data: ${JSON.stringify(data)}\n\n`);
+                  };
+
+                  const { reply, filePaths } = await runChatAgent({
+                    directory: rootPath,
+                    messages: [...history, { role: 'user', content: body.message }],
+                    onToolStart: (name) => sendEvent({ type: 'tool_start', name }),
+                    onToolEnd:   (name) => sendEvent({ type: 'tool_end',   name }),
+                  });
+
+                  const highlightIds = filePaths
+                    .map(p => pathToNodeId.get(normalise(p)))
+                    .filter((id): id is string => Boolean(id));
+
+                  sendEvent({ type: 'reply', reply, highlightIds, filePaths });
+                  res.end();
+                } catch (err) {
+                  // If headers already sent (SSE started), send error event; otherwise plain JSON.
+                  if (res.headersSent) {
+                    res.write(`data: ${JSON.stringify({ type: 'error', error: sanitizeErrorMessage((err as Error).message) })}\n\n`);
+                    res.end();
+                  } else {
+                    res.statusCode = 500;
+                    res.end(JSON.stringify({ error: sanitizeErrorMessage((err as Error).message) }));
+                  }
                 }
               });
 

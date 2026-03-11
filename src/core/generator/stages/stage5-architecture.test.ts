@@ -89,6 +89,8 @@ const MOCK_DEP_GRAPH: DependencyGraphResult = {
   nodes: [],
   edges: [],
   clusters: [],
+  structuralClusters: [],
+  directoryClusters: [],
   rankings: {
     byImportance: [],
     byConnectivity: [],
@@ -104,6 +106,7 @@ const MOCK_DEP_GRAPH: DependencyGraphResult = {
     avgDegree: 3,
     density: 0.15,
     clusterCount: 5,
+    structuralClusterCount: 0,
     cycleCount: 0,
   },
 };

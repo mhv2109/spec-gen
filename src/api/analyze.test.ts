@@ -13,10 +13,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
-    access:    vi.fn(),
-    stat:      vi.fn(),
-    mkdir:     vi.fn().mockResolvedValue(undefined),
-    readFile:  vi.fn(),
+    access: vi.fn(),
+    stat: vi.fn(),
+    mkdir: vi.fn().mockResolvedValue(undefined),
+    readFile: vi.fn(),
     writeFile: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -26,19 +26,19 @@ vi.mock('../core/services/config-manager.js', () => ({
 }));
 
 vi.mock('../core/analyzer/repository-mapper.js', () => ({
-  RepositoryMapper: vi.fn().mockImplementation(function(this: unknown) {
+  RepositoryMapper: vi.fn().mockImplementation(function (this: unknown) {
     Object.assign(this as object, { map: vi.fn() });
   }),
 }));
 
 vi.mock('../core/analyzer/dependency-graph.js', () => ({
-  DependencyGraphBuilder: vi.fn().mockImplementation(function(this: unknown) {
+  DependencyGraphBuilder: vi.fn().mockImplementation(function (this: unknown) {
     Object.assign(this as object, { build: vi.fn() });
   }),
 }));
 
 vi.mock('../core/analyzer/artifact-generator.js', () => ({
-  AnalysisArtifactGenerator: vi.fn().mockImplementation(function(this: unknown) {
+  AnalysisArtifactGenerator: vi.fn().mockImplementation(function (this: unknown) {
     Object.assign(this as object, { generateAndSave: vi.fn() });
   }),
 }));
@@ -62,36 +62,53 @@ const ROOT = '/test/project';
 const MOCK_CONFIG = { version: '1.0.0', openspecPath: './openspec' };
 const MOCK_REPO_STRUCTURE = JSON.stringify({ architecture: { pattern: 'layered' }, domains: [] });
 const MOCK_DEP_GRAPH = JSON.stringify({
-  statistics: { nodeCount: 1, edgeCount: 0, clusterCount: 0, cycleCount: 0, avgDegree: 0 },
+  statistics: {
+    nodeCount: 1,
+    edgeCount: 0,
+    clusterCount: 0,
+    cycleCount: 0,
+    avgDegree: 0,
+    density: 0,
+  },
 });
 const MOCK_ARTIFACTS = {
   repoStructure: { architecture: { pattern: 'layered' }, domains: [] },
   llmContext: { callGraph: null },
 };
-const OLD_MTIME    = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
-const RECENT_MTIME = new Date(Date.now() - 5 * 60 * 1000);      // 5 minutes ago
+const OLD_MTIME = new Date(Date.now() - 2 * 60 * 60 * 1000); // 2 hours ago
+const RECENT_MTIME = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
 
 function setupMocks() {
-  mockReadSpecGenConfig.mockResolvedValue(MOCK_CONFIG as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never);
+  mockReadSpecGenConfig.mockResolvedValue(
+    MOCK_CONFIG as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never
+  );
 
-  vi.mocked(RepositoryMapper).mockImplementation(function(this: unknown) {
+  vi.mocked(RepositoryMapper).mockImplementation(function (this: unknown) {
     Object.assign(this as object, {
       map: vi.fn().mockResolvedValue({
-        allFiles: [], highValueFiles: [],
+        allFiles: [],
+        highValueFiles: [],
         summary: { totalFiles: 1, analyzedFiles: 1, skippedFiles: 0, languages: ['typescript'] },
       }),
     });
   });
 
-  vi.mocked(DependencyGraphBuilder).mockImplementation(function(this: unknown) {
+  vi.mocked(DependencyGraphBuilder).mockImplementation(function (this: unknown) {
     Object.assign(this as object, {
       build: vi.fn().mockResolvedValue({
-        statistics: { nodeCount: 1, edgeCount: 0, clusterCount: 0, cycleCount: 0, avgDegree: 0 },
+        statistics: {
+          nodeCount: 1,
+          edgeCount: 0,
+          clusterCount: 0,
+          cycleCount: 0,
+          avgDegree: 0,
+          density: 0,
+        },
       }),
     });
   });
 
-  vi.mocked(AnalysisArtifactGenerator).mockImplementation(function(this: unknown) {
+  vi.mocked(AnalysisArtifactGenerator).mockImplementation(function (this: unknown) {
     Object.assign(this as object, { generateAndSave: vi.fn().mockResolvedValue(MOCK_ARTIFACTS) });
   });
 }
@@ -109,7 +126,9 @@ describe('specGenAnalyze', () => {
   describe('config validation', () => {
     it('throws if no spec-gen config found', async () => {
       mockAccess.mockRejectedValue(new Error('ENOENT'));
-      mockReadSpecGenConfig.mockResolvedValue(null as unknown as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never);
+      mockReadSpecGenConfig.mockResolvedValue(
+        null as unknown as ReturnType<typeof readSpecGenConfig> extends Promise<infer T> ? T : never
+      );
 
       await expect(specGenAnalyze({ rootPath: ROOT })).rejects.toThrow();
     });
@@ -180,10 +199,12 @@ describe('specGenAnalyze', () => {
       const events: Array<{ step: string; status: string }> = [];
       await specGenAnalyze({
         rootPath: ROOT,
-        onProgress: e => events.push({ step: e.step, status: e.status }),
+        onProgress: (e) => events.push({ step: e.step, status: e.status }),
       });
       expect(events.length).toBeGreaterThan(0);
-      expect(events.some(e => e.step.includes('Scanning') || e.step.includes('Building'))).toBe(true);
+      expect(events.some((e) => e.step.includes('Scanning') || e.step.includes('Building'))).toBe(
+        true
+      );
     });
   });
 });

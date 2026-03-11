@@ -148,6 +148,7 @@ function createMockDepGraph(overrides: Partial<DependencyGraphResult> = {}): Dep
       cohesion: 0,
       coupling: 1,
       suggestedDomain: 'services',
+      isStructural: false,
     },
   ];
 
@@ -155,6 +156,8 @@ function createMockDepGraph(overrides: Partial<DependencyGraphResult> = {}): Dep
     nodes,
     edges,
     clusters,
+    structuralClusters: overrides.structuralClusters ?? [],
+    directoryClusters: overrides.directoryClusters ?? clusters,
     rankings: overrides.rankings ?? {
       byImportance: ['/test/src/models/user.ts', '/test/src/services/user-service.ts', '/test/src/index.ts'],
       byConnectivity: ['/test/src/services/user-service.ts', '/test/src/models/user.ts', '/test/src/index.ts'],
@@ -170,6 +173,7 @@ function createMockDepGraph(overrides: Partial<DependencyGraphResult> = {}): Dep
       avgDegree: 2,
       density: 0.33,
       clusterCount: 1,
+      structuralClusterCount: 0,
       cycleCount: 0,
     },
   };
@@ -433,7 +437,7 @@ describe('AnalysisArtifactGenerator', () => {
       const repoMap = createMockRepoMap();
       const depGraph = createMockDepGraph({
         cycles: [['/test/a.ts', '/test/b.ts', '/test/a.ts']],
-        statistics: { nodeCount: 3, edgeCount: 2, avgDegree: 2, density: 0.33, clusterCount: 1, cycleCount: 1 },
+        statistics: { nodeCount: 3, edgeCount: 2, avgDegree: 2, density: 0.33, clusterCount: 1, structuralClusterCount: 0, cycleCount: 1 },
       });
 
       const artifacts = await generateArtifacts(repoMap, depGraph, {
@@ -666,6 +670,7 @@ describe('AnalysisArtifactGenerator', () => {
           avgDegree: 0,
           density: 0,
           clusterCount: 0,
+          structuralClusterCount: 0,
           cycleCount: 0,
         },
       });

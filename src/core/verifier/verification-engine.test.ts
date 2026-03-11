@@ -150,6 +150,8 @@ export function createUserService(): UserService {
       nodes,
       edges: [],
       clusters: [],
+      structuralClusters: [],
+      directoryClusters: [],
       rankings: {
         byImportance: files.map(f => f.path),
         byConnectivity: files.map(f => f.path),
@@ -165,6 +167,7 @@ export function createUserService(): UserService {
         avgDegree: 1,
         density: 0.1,
         clusterCount: 1,
+        structuralClusterCount: 0,
         cycleCount: 0,
       },
     };

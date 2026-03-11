@@ -62,9 +62,11 @@ function makeDepGraph(...nodes: DependencyNode[]): DependencyGraphResult {
     nodes,
     edges: [],
     clusters: [],
+    structuralClusters: [],
+    directoryClusters: [],
     rankings: { byImportance: [], byConnectivity: [], clusterCenters: [], leafNodes: [], bridgeNodes: [], orphanNodes: [] },
     cycles: [],
-    statistics: { nodeCount: nodes.length, edgeCount: 0, avgDegree: 0, density: 0, clusterCount: 0, cycleCount: 0 },
+    statistics: { nodeCount: nodes.length, edgeCount: 0, avgDegree: 0, density: 0, clusterCount: 0, structuralClusterCount: 0, cycleCount: 0 },
   };
 }
 

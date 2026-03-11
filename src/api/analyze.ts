@@ -9,11 +9,19 @@ import { join } from 'node:path';
 import { access, stat, mkdir, writeFile } from 'node:fs/promises';
 import { readSpecGenConfig } from '../core/services/config-manager.js';
 import { RepositoryMapper } from '../core/analyzer/repository-mapper.js';
-import { DependencyGraphBuilder, type DependencyGraphResult } from '../core/analyzer/dependency-graph.js';
+import {
+  DependencyGraphBuilder,
+  type DependencyGraphResult,
+} from '../core/analyzer/dependency-graph.js';
 import { AnalysisArtifactGenerator } from '../core/analyzer/artifact-generator.js';
 import type { AnalyzeApiOptions, AnalyzeResult, ProgressCallback, RepositoryMap } from './types.js';
 
-function progress(onProgress: ProgressCallback | undefined, step: string, status: 'start' | 'progress' | 'complete' | 'skip', detail?: string): void {
+function progress(
+  onProgress: ProgressCallback | undefined,
+  step: string,
+  status: 'start' | 'progress' | 'complete' | 'skip',
+  detail?: string
+): void {
   onProgress?.({ phase: 'analyze', step, status, detail });
 }
 
@@ -58,7 +66,12 @@ export async function specGenAnalyze(options: AnalyzeApiOptions = {}): Promise<A
       const age = Date.now() - stats.mtime.getTime();
       const oneHour = 60 * 60 * 1000;
       if (age < oneHour) {
-        progress(onProgress, 'Recent analysis exists', 'skip', `${Math.floor(age / 60000)} minutes old`);
+        progress(
+          onProgress,
+          'Recent analysis exists',
+          'skip',
+          `${Math.floor(age / 60000)} minutes old`
+        );
         // Load and return existing analysis
         const { readFile } = await import('node:fs/promises');
         const repoStructureContent = await readFile(repoStructurePath, 'utf-8');
@@ -74,9 +87,29 @@ export async function specGenAnalyze(options: AnalyzeApiOptions = {}): Promise<A
         return {
           repoMap: repoStructure,
           depGraph: depGraph ?? {
-            nodes: [], edges: [], clusters: [], cycles: [],
-            rankings: { byImportance: [], byConnectivity: [], clusterCenters: [], leafNodes: [], bridgeNodes: [], orphanNodes: [] },
-            statistics: { nodeCount: 0, edgeCount: 0, clusterCount: 0, cycleCount: 0, avgDegree: 0, density: 0 },
+            nodes: [],
+            edges: [],
+            clusters: [],
+            cycles: [],
+            structuralClusters: [],
+            directoryClusters: [],
+            rankings: {
+              byImportance: [],
+              byConnectivity: [],
+              clusterCenters: [],
+              leafNodes: [],
+              bridgeNodes: [],
+              orphanNodes: [],
+            },
+            statistics: {
+              nodeCount: 0,
+              edgeCount: 0,
+              clusterCount: 0,
+              cycleCount: 0,
+              avgDegree: 0,
+              density: 0,
+              structuralClusterCount: 0,
+            },
           },
           artifacts: { repoStructure } as unknown as AnalyzeResult['artifacts'],
           duration: Date.now() - startTime,
@@ -95,13 +128,23 @@ export async function specGenAnalyze(options: AnalyzeApiOptions = {}): Promise<A
     excludePatterns: excludePatterns.length > 0 ? excludePatterns : undefined,
   });
   const repoMap = await mapper.map();
-  progress(onProgress, 'Scanning directory structure', 'complete', `${repoMap.summary.analyzedFiles} files`);
+  progress(
+    onProgress,
+    'Scanning directory structure',
+    'complete',
+    `${repoMap.summary.analyzedFiles} files`
+  );
 
   // Phase 2: Dependency Graph
   progress(onProgress, 'Building dependency graph', 'start');
   const graphBuilder = new DependencyGraphBuilder({ rootDir: rootPath });
   const depGraph = await graphBuilder.build(repoMap.allFiles);
-  progress(onProgress, 'Building dependency graph', 'complete', `${depGraph.statistics.nodeCount} nodes, ${depGraph.statistics.edgeCount} edges`);
+  progress(
+    onProgress,
+    'Building dependency graph',
+    'complete',
+    `${depGraph.statistics.nodeCount} nodes, ${depGraph.statistics.edgeCount} edges`
+  );
 
   // Phase 3: Generate Artifacts
   progress(onProgress, 'Generating analysis artifacts', 'start');
@@ -114,10 +157,7 @@ export async function specGenAnalyze(options: AnalyzeApiOptions = {}): Promise<A
   const artifacts = await artifactGenerator.generateAndSave(repoMap, depGraph);
 
   // Save dependency graph
-  await writeFile(
-    join(outputPath, 'dependency-graph.json'),
-    JSON.stringify(depGraph, null, 2)
-  );
+  await writeFile(join(outputPath, 'dependency-graph.json'), JSON.stringify(depGraph, null, 2));
   progress(onProgress, 'Generating analysis artifacts', 'complete');
 
   const duration = Date.now() - startTime;

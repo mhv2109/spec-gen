@@ -95,6 +95,8 @@ function createMockDepGraph(): DependencyGraphResult {
     nodes: [],
     edges: [],
     clusters: [],
+    structuralClusters: [],
+    directoryClusters: [],
     rankings: {
       byImportance: [],
       byConnectivity: [],
@@ -110,6 +112,7 @@ function createMockDepGraph(): DependencyGraphResult {
       avgDegree: 3,
       density: 0.1,
       clusterCount: 3,
+      structuralClusterCount: 0,
       cycleCount: 0,
     },
   };

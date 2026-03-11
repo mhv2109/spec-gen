@@ -54,6 +54,12 @@ export interface FileCluster {
   cohesion: number;
   coupling: number;
   suggestedDomain: string;
+  /**
+   * True when the cluster has at least one internal edge (files actually
+   * import each other). False clusters are pure directory groups with no
+   * connectivity — useful for rendering at a lower visual prominence.
+   */
+  isStructural: boolean;
 }
 
 /**
@@ -62,7 +68,12 @@ export interface FileCluster {
 export interface DependencyGraphResult {
   nodes: DependencyNode[];
   edges: DependencyEdge[];
+  /** All clusters (structural + directory groups) */
   clusters: FileCluster[];
+  /** Only clusters with internalEdges > 0 — worth highlighting visually */
+  structuralClusters: FileCluster[];
+  /** Clusters with no internal edges — pure directory groupings */
+  directoryClusters: FileCluster[];
   rankings: {
     byImportance: string[];
     byConnectivity: string[];
@@ -77,7 +88,10 @@ export interface DependencyGraphResult {
     edgeCount: number;
     avgDegree: number;
     density: number;
+    /** Total clusters including directory-only groups */
     clusterCount: number;
+    /** Clusters with at least one internal edge */
+    structuralClusterCount: number;
     cycleCount: number;
   };
 }
@@ -178,10 +192,15 @@ export class DependencyGraphBuilder {
     // Calculate statistics
     const statistics = this.calculateStatistics(clusters, cycles);
 
+    const structuralClusters = clusters.filter(c => c.isStructural);
+    const directoryClusters = clusters.filter(c => !c.isStructural);
+
     return {
       nodes: Array.from(this.nodes.values()),
       edges: this.edges,
       clusters,
+      structuralClusters,
+      directoryClusters,
       rankings,
       cycles,
       statistics,
@@ -488,6 +507,7 @@ export class DependencyGraphBuilder {
         cohesion,
         coupling,
         suggestedDomain,
+        isStructural: internalEdges > 0,
       });
     }
 
@@ -709,6 +729,7 @@ export class DependencyGraphBuilder {
       avgDegree,
       density,
       clusterCount: clusters.length,
+      structuralClusterCount: clusters.filter(c => c.isStructural).length,
       cycleCount: cycles.length,
     };
   }
@@ -740,9 +761,10 @@ export function toD3Format(result: DependencyGraphResult): {
   nodes: Array<{ id: string; group: number; score: number }>;
   links: Array<{ source: string; target: string; value: number }>;
 } {
-  // Create cluster index map
+  // Use only structural clusters for group colouring — directory-only
+  // clusters (cohesion=0) would produce too many indistinct colour groups.
   const clusterIndex = new Map<string, number>();
-  result.clusters.forEach((cluster, idx) => {
+  result.structuralClusters.forEach((cluster, idx) => {
     for (const file of cluster.files) {
       clusterIndex.set(file, idx);
     }

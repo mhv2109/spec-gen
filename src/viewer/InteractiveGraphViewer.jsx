@@ -320,7 +320,12 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
   }, [selectedId, affectedIds, visibleEdges]);
 
   const stats = graph?.statistics || {};
-  const clusterNames = graph?.clusters.map((c) => c.name) || [];
+  // Use structuralClusters (clusters with real internal edges) for all UI.
+  // Falls back to filtering by isStructural for graphs built before the field existed.
+  const displayClusters = graph
+    ? (graph.structuralClusters ?? graph.clusters.filter((c) => c.isStructural !== false && c.internalEdges > 0))
+    : [];
+  const clusterNames = displayClusters.map((c) => c.name);
 
   // ── Upload screen ─────────────────────────────────────────────────────────
   if (!graph)
@@ -453,7 +458,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
         {[
           ['nodes', stats.nodeCount],
           ['edges', stats.edgeCount],
-          ['clusters', stats.clusterCount],
+          ['clusters', stats.structuralClusterCount ?? displayClusters.length],
         ].map(([l, v]) => (
           <div
             key={l}
@@ -723,7 +728,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
             <ArchitectureView graph={graph} llmCtx={llmCtx} focusedIds={focusedIds} />
           ) : viewMode === 'clusters' ? (
             <ClusterGraph
-              clusters={graph.clusters.filter(
+              clusters={displayClusters.filter(
                 (cl) => !filters.cluster || cl.name === filters.cluster
               )}
               edges={visibleEdges}
@@ -1325,7 +1330,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
                 {[
                   ['Nodes', stats.nodeCount],
                   ['Edges', stats.edgeCount],
-                  ['Clusters', stats.clusterCount],
+                  ['Clusters', stats.structuralClusterCount ?? displayClusters.length],
                   ['Cycles', stats.cycleCount],
                   ['Avg degree', stats.avgDegree?.toFixed(2)],
                   ['Density', stats.density?.toFixed(4)],
@@ -1443,7 +1448,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
               CLUSTERS · click to filter
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {graph.clusters.map((cl) => (
+              {displayClusters.map((cl) => (
                 <div
                   key={cl.id}
                   onClick={() =>

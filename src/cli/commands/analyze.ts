@@ -25,6 +25,7 @@ import {
   buildArchitectureOverview,
   writeArchitectureMd,
 } from '../../core/analyzer/architecture-writer.js';
+import { EmbeddingService } from '../../core/analyzer/embedding-service.js';
 
 // ============================================================================
 // TYPES
@@ -288,6 +289,14 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
         logger.error('No spec-gen configuration found. Run "spec-gen init" first.');
         process.exitCode = 1;
         return;
+      }
+
+      // Auto-enable --embed when embedding is configured but flag wasn't passed explicitly.
+      if (!options.embed) {
+        const embedConfigured =
+          !!process.env.EMBED_BASE_URL ||
+          !!EmbeddingService.fromConfig(specGenConfig);
+        if (embedConfigured) opts.embed = true;
       }
 
       logger.info('Project', specGenConfig.projectType);
@@ -564,7 +573,6 @@ After analysis, run 'spec-gen generate' to create OpenSpec files.
       if (opts.embed) {
         console.log('  Building semantic vector index...');
         try {
-          const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
           const { VectorIndex } = await import('../../core/analyzer/vector-index.js');
 
           // Resolve embedding config: env vars take priority, then .spec-gen/config.json
@@ -635,7 +643,6 @@ async function runSpecIndexing(
 ): Promise<void> {
   const { existsSync } = await import('node:fs');
   const { join: pathJoin } = await import('node:path');
-  const { EmbeddingService } = await import('../../core/analyzer/embedding-service.js');
   const { SpecVectorIndex } = await import('../../core/analyzer/spec-vector-index.js');
   const { readSpecGenConfig } = await import('../../core/services/config-manager.js');
 

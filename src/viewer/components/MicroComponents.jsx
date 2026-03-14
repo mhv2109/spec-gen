@@ -58,20 +58,22 @@ export function Chip({ color, children }) {
 
 export function KindBadge({ kind }) {
   const map = {
-    class: ['#a78bfa', '#1a1060'],
-    function: ['#4ecdc4', '#00301a'],
-    interface: ['#60a5fa', '#001a30'],
-    type: ['#f472b6', '#2a0a20'],
-    enum: ['#f5c518', '#2a1a00'],
+    class:     '#a78bfa',
+    function:  '#4ecdc4',
+    interface: '#60a5fa',
+    type:      '#f472b6',
+    enum:      '#f5c518',
+    const:     '#fb923c',
   };
-  const [c, bg] = map[kind] || ['#64748b', '#1a1a2a'];
+  const c = map[kind] || '#64748b';
   return (
     <span
       style={{
         fontSize: 7,
         padding: '1px 5px',
         borderRadius: 3,
-        background: bg,
+        background: `${c}18`,
+        border: `1px solid ${c}45`,
         color: c,
         minWidth: 44,
         textAlign: 'center',

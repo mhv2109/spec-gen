@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { extColor } from './utils/constants.js';
+import { extColor, CLUSTER_PALETTE, CLUSTER_PALETTE_LIGHT } from './utils/constants.js';
 import {
   parseSpecRequirements,
   buildMappingIndex,
@@ -17,7 +17,7 @@ import { ChatPanel } from './components/ChatPanel.jsx';
 import { THEMES, THEME_KEYS, DEFAULT_THEME } from './utils/themes.js';
 
 export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '/api/spec' }) {
-  const [graph, setGraph] = useState(null);
+  const [rawGraph, setRawGraph] = useState(null);
   const [llmCtx, setLlmCtx] = useState(null);
   const [refReport, setRefReport] = useState(null);
   const [mapping, setMapping] = useState(null);
@@ -47,6 +47,14 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
     () => localStorage.getItem('spec-gen-theme') || DEFAULT_THEME
   );
   const theme = THEMES[themeName] ?? THEMES[DEFAULT_THEME];
+  const clusterPalette = themeName === 'light' ? CLUSTER_PALETTE_LIGHT : CLUSTER_PALETTE;
+
+  // Derive graph from raw data — recomputes automatically when theme, refReport or raw data changes.
+  const graph = useMemo(() => {
+    if (!rawGraph) return null;
+    const g = parseGraph(rawGraph, clusterPalette);
+    return refReport ? enrichGraphWithRefactors(g, refReport) : g;
+  }, [rawGraph, clusterPalette, refReport]);
   const cycleTheme = () => setThemeName((prev) => {
     const idx = THEME_KEYS.indexOf(prev);
     const next = THEME_KEYS[(idx + 1) % THEME_KEYS.length];
@@ -63,8 +71,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
   const loadGraph = useCallback(
     (jsonStr) => {
       try {
-        const g = parseGraph(JSON.parse(jsonStr));
-        setGraph(refReport ? enrichGraphWithRefactors(g, refReport) : g);
+        setRawGraph(JSON.parse(jsonStr));
         setSelectedId(null);
         setAffectedIds([]);
         setFocusedIds([]);
@@ -81,7 +88,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
         alert('Invalid JSON: ' + e.message);
       }
     },
-    [refReport]
+    []
   );
 
   const loadMapping = useCallback((jsonStr) => {
@@ -120,7 +127,6 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
           if (refRes.ok) {
             const report = await refRes.json();
             setRefReport(report);
-            setGraph((g) => (g ? enrichGraphWithRefactors(g, report) : g));
           }
         } catch { /* ignore */ }
 
@@ -294,14 +300,14 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
       });
     }
 
-    // Select the first highlighted node to show details and prominent highlight
-    if (validNodeIds.length > 0) {
-      const id = validNodeIds[0];
-      setSelectedId(id);
-      setAffectedIds(computeBlast(visibleEdges, id));
+    // If exactly one node matched, auto-select it for details — but skip blast radius
+    // to avoid lighting up unrelated edges through the full reachability set.
+    if (validNodeIds.length === 1) {
+      setSelectedId(validNodeIds[0]);
+      setAffectedIds([]);
       setTab(mapping ? 'spec' : 'node');
     }
-  }, [focusedIds, graph, visibleEdges, mapping, computeBlast]);
+  }, [focusedIds, graph, mapping]);
 
   const selectedNode = graph?.nodes.find((n) => n.id === selectedId);
 
@@ -622,7 +628,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
         </div>
         <button
           onClick={() => {
-            setGraph(null);
+            setRawGraph(null);
             setSelectedId(null);
           }}
           style={{
@@ -770,6 +776,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
               affectedIds={affectedIds}
               linkedIds={linkedIds}
               focusedIds={focusedIds}
+              noGlow={themeName === 'light' || themeName === 'warm'}
             />
           ) : (
             <FlatGraph
@@ -781,6 +788,7 @@ export default function App({ graphUrl, mappingUrl = '/api/mapping', specUrl = '
               onSelect={handleSelect}
               refactorOnly={filters.refactorOnly}
               linkedIds={linkedIds}
+              noGlow={themeName === 'light' || themeName === 'warm'}
             />
           )}
           {!selectedId && (

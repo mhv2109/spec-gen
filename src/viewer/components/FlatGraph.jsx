@@ -12,6 +12,7 @@ export function FlatGraph({
   onSelect,
   refactorOnly,
   linkedIds,
+  noGlow,
 }) {
   const posRef = useRef(null);
   const prevKey = useRef(null);
@@ -110,6 +111,7 @@ export function FlatGraph({
           const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
           const r =
             Math.max(...pts.map((p) => Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2)), 20) + 28;
+          const clusterName = cn[0]?.cluster?.name ?? cid;
           return (
             <ellipse
               key={cid}
@@ -117,11 +119,13 @@ export function FlatGraph({
               cy={cy}
               rx={r}
               ry={r * 0.85}
-              fill={`${color}07`}
-              stroke={`${color}18`}
+              fill={noGlow ? 'none' : `${color}07`}
+              stroke={`${color}${noGlow ? '40' : '18'}`}
               strokeWidth={1}
               strokeDasharray="5 3"
-            />
+            >
+              <title>{clusterName} — {cn.length} file{cn.length !== 1 ? 's' : ''}</title>
+            </ellipse>
           );
         })}
 
@@ -138,6 +142,8 @@ export function FlatGraph({
             nr = 18;
           const isSel = e.source === selectedId || e.target === selectedId;
           const isAff = affectedIds.includes(e.target) && e.source === selectedId;
+          const isDimEdge = focusedIds.length > 0 && !isSel &&
+            !focusedIds.includes(e.source) && !focusedIds.includes(e.target);
           return (
             <line
               key={e.id}
@@ -147,7 +153,7 @@ export function FlatGraph({
               y2={t.y - ny * (nr + 5)}
               stroke={isSel ? 'var(--ac-primary)' : isAff ? '#f77c6a' : e.isType ? 'var(--ac-edge-type)' : 'var(--bd-edge)'}
               strokeWidth={isSel ? 1.5 : isAff ? 1.2 : 0.8}
-              strokeOpacity={isSel ? 0.9 : isAff ? 0.7 : e.isType ? 0.35 : 0.55}
+              strokeOpacity={isDimEdge ? 0.08 : isSel ? 0.9 : isAff ? 0.7 : e.isType ? 0.35 : 0.55}
               strokeDasharray={e.isType ? '4 2' : undefined}
               markerEnd={
                 isSel
@@ -189,8 +195,9 @@ export function FlatGraph({
               }}
               style={{ cursor: 'pointer' }}
               opacity={isDim ? 0.08 : isZeroScore ? 0.18 : 1}
-              filter={isSel ? 'url(#glow)' : isAff ? 'url(#glow-aff)' : undefined}
+              filter={noGlow ? undefined : isSel ? 'url(#glow)' : isAff ? 'url(#glow-aff)' : undefined}
             >
+              <title>{n.label}{n.path ? `\n${n.path}` : ''}</title>
               <circle
                 r={r + 4}
                 fill="none"

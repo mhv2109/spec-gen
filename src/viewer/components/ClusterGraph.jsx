@@ -17,6 +17,7 @@ export function ClusterGraph({
   affectedIds,
   linkedIds,
   focusedIds,
+  noGlow,
 }) {
   const clusterPos = useMemo(
     () => computeClusterLayout(clusters),
@@ -139,7 +140,11 @@ export function ClusterGraph({
       <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
         {/* Inter-cluster edges */}
         {!selectedId &&
-          clusterEdges.map((e) => {
+          (() => {
+            const focusedClusterIds = focusedIds?.length > 0
+              ? new Set(nodes.filter((n) => focusedIds.includes(n.id)).map((n) => n.cluster.id))
+              : null;
+            return clusterEdges.map((e) => {
             const s = clusterPos[e.source],
               t = clusterPos[e.target];
             if (!s || !t) return null;
@@ -151,6 +156,8 @@ export function ClusterGraph({
             const rs = 38,
               rt = 38;
             const w = Math.min(1 + e.count * 0.15, 4);
+            const isDimEdge = focusedClusterIds &&
+              !focusedClusterIds.has(e.source) && !focusedClusterIds.has(e.target);
             return (
               <g key={e.id}>
                 <line
@@ -160,7 +167,7 @@ export function ClusterGraph({
                   y2={t.y - ny * (rt + 5)}
                   stroke="var(--ac-arrow)"
                   strokeWidth={w}
-                  strokeOpacity={0.5}
+                  strokeOpacity={isDimEdge ? 0.06 : 0.5}
                   markerEnd="url(#carr)"
                 />
                 <text
@@ -175,7 +182,8 @@ export function ClusterGraph({
                 </text>
               </g>
             );
-          })}
+          });
+          })()}
 
         {/* Node-level edges when a node is selected */}
         {selectedId &&
@@ -238,6 +246,9 @@ export function ClusterGraph({
                 const nx = dx / len,
                   ny = dy / len,
                   r = 13;
+                const isSel = e.source === selectedId || e.target === selectedId;
+                const isDimEdge = focusedIds?.length > 0 && !isSel &&
+                  !focusedIds.includes(e.source) && !focusedIds.includes(e.target);
                 return (
                   <line
                     key={e.id}
@@ -247,7 +258,7 @@ export function ClusterGraph({
                     y2={t.y - ny * (r + 4)}
                     stroke={cl.color}
                     strokeWidth={0.8}
-                    strokeOpacity={0.45}
+                    strokeOpacity={isDimEdge ? 0.06 : 0.45}
                     strokeDasharray={e.isType ? '3 2' : undefined}
                     markerEnd="url(#carr)"
                   />
@@ -289,10 +300,11 @@ export function ClusterGraph({
                     }}
                     style={{ cursor: 'pointer' }}
                     filter={
-                      isExpanded ? 'url(#cglow)' : isLinkedCollapsed ? 'url(#cglow)' : undefined
+                      noGlow ? undefined : isExpanded ? 'url(#cglow)' : isLinkedCollapsed ? 'url(#cglow)' : undefined
                     }
                     opacity={isClusterGreyed ? 0.18 : 1}
                   >
+                    <title>{cl.name} — {allMembers.length} file{allMembers.length !== 1 ? 's' : ''}</title>
                     <circle
                       r={r}
                       fill={isLinkedCollapsed ? `${cl.color}18` : `${cl.color}10`}
@@ -370,9 +382,10 @@ export function ClusterGraph({
                         if (!isDrag()) onSelectNode(n.id);
                       }}
                       style={{ cursor: 'pointer' }}
-                      filter={isSel ? 'url(#nglow)' : undefined}
+                      filter={noGlow ? undefined : isSel ? 'url(#nglow)' : undefined}
                       opacity={isGreyed ? 0.18 : 1}
                     >
+                      <title>{n.label}{n.path ? `\n${n.path}` : ''}</title>
                       <circle
                         r={13}
                         fill={isSel ? `${col}1a` : 'var(--bg-node)'}

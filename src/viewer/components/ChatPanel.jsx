@@ -395,8 +395,8 @@ export function ChatPanel({ onHighlight, onClose }) {
 
         {error && (
           <div style={{
-            fontSize: 9, color: '#f87171', background: '#1a0a0a',
-            border: '1px solid #3a1a1a', borderRadius: 4,
+            fontSize: 9, color: 'var(--tx-primary)', background: 'rgba(192,57,43,0.10)',
+            border: '1px solid rgba(192,57,43,0.35)', borderRadius: 4,
             padding: '5px 8px', fontFamily: 'inherit',
           }}>
             Error: {error}

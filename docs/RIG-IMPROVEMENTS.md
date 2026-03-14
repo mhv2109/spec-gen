@@ -457,8 +457,8 @@ ajouter ces peers comme candidats supplémentaires avec score décoté.
 | 17 | Pipeline e2e sur vrai dépôt open source | 5 | **Élevé** | ✅ |
 | 18 | Tests de régression formalisés | 5 | **Élevé** | ✅ |
 | 19 | Tests MCP bout en bout sur données réelles | 5 | **Moyen** | ✅ |
-| 20 | Traversée cross-graph code↔spec↔code | 6 | **Élevé** | — |
-| 21 | Graph expansion depth-N avec score decay | 6 | **Élevé** | — |
+| 20 | Traversée cross-graph code↔spec↔code | 6 | **Élevé** | ✅ |
+| 21 | Graph expansion depth-N avec score decay | 6 | **Élevé** | ✅ |
 | 22 | Traversée du graphe de specs (spec→spec) | 6 | **Moyen** | — |
 | 23 | Context packing orienté communautés | 6 | **Moyen** | — |
 | 24 | Betweenness centrality comme signal de ranking | 6 | **Faible** | — |

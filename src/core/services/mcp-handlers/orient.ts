@@ -15,7 +15,7 @@
  */
 
 import { join } from 'node:path';
-import { validateDirectory, loadMappingIndex, specsForFile, readCachedContext } from './utils.js';
+import { validateDirectory, loadMappingIndex, specsForFile, functionsForDomain, readCachedContext } from './utils.js';
 import { readSpecGenConfig } from '../config-manager.js';
 import {
   classifyRole,
@@ -164,6 +164,28 @@ export async function handleOrient(
   // ── Relevant files (deduplicated) ─────────────────────────────────────────
   const relevantFiles = [...new Set(relevantFunctions.map(f => f.filePath))];
 
+  // ── RIG-20: cross-graph spec traversal — seed → spec domains → peer functions ──
+  // Surfaces implementations linked via the spec even when the call graph
+  // doesn't connect them to the seed functions.
+  type SpecLinkedFunction = { name: string; filePath: string; domain: string; requirement: string };
+  const specLinkedFunctions: SpecLinkedFunction[] = [];
+  if (mappingIdx && relevantFunctions.length > 0) {
+    const seedDomains = new Set<string>();
+    for (const fn of relevantFunctions) {
+      for (const spec of fn.linkedSpecs) seedDomains.add(spec.domain);
+    }
+    const seedFileSet = new Set(relevantFiles);
+    const seen = new Set<string>();
+    for (const domain of seedDomains) {
+      for (const fn of functionsForDomain(mappingIdx, domain)) {
+        const key = `${fn.name}::${fn.file}`;
+        if (seen.has(key) || seedFileSet.has(fn.file)) continue;
+        seen.add(key);
+        specLinkedFunctions.push({ name: fn.name, filePath: fn.file, domain, requirement: fn.requirement });
+      }
+    }
+  }
+
   // ── Spec domains covering those files ─────────────────────────────────────
   const domainScores = new Map<string, { specFile: string; matchCount: number }>();
   if (mappingIdx) {
@@ -244,6 +266,7 @@ export async function handleOrient(
       : {}),
     relevantFiles,
     relevantFunctions,
+    ...(specLinkedFunctions.length > 0 ? { specLinkedFunctions } : {}),
     specDomains,
     callPaths,
     insertionPoints,

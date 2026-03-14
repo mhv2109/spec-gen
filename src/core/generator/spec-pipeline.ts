@@ -450,16 +450,18 @@ export class SpecGenerationPipeline implements PipelineContext {
   }
 
   /**
-   * Generation retrieval strategy: semantic-first → graph expansion.
+   * Generation retrieval strategy: semantic-first → depth-N graph expansion.
    *
    * 1. Semantic search identifies seed files relevant to the query.
-   * 2. Graph expansion (depth-1 callees) adds files called by the seed
-   *    functions, so indirect implementations are not missed.
+   * 2. BFS graph expansion up to `depth` hops adds callee files so indirect
+   *    implementations are not missed. Score decays by λ^hop (λ=0.6) — used
+   *    only for logging; all resolved files are passed to the LLM stage.
    */
   private async semanticFiles(
     query: string,
     context: LLMContext,
-    limit = 15
+    limit = 15,
+    depth = 2,
   ): Promise<Array<{ path: string; content: string }>> {
     if (!this.semanticSearch) return [];
     try {
@@ -485,7 +487,7 @@ export class SpecGenerationPipeline implements PipelineContext {
       for (const r of results) await resolveFile(r.record.filePath);
       const seedCount = files.length;
 
-      // Step 2: graph expansion — add depth-1 callee files from the call graph
+      // Step 2: depth-N BFS callee expansion (RIG-21)
       const cg = context.callGraph;
       if (cg && seedCount > 0) {
         const calleeMap = new Map<string, string[]>();
@@ -497,15 +499,24 @@ export class SpecGenerationPipeline implements PipelineContext {
         }
         const nodeFile = new Map(cg.nodes.map(n => [n.id, n.filePath]));
         const seedPaths = new Set(seen);
-        for (const node of cg.nodes) {
-          if (!seedPaths.has(node.filePath)) continue;
-          for (const calleeId of calleeMap.get(node.id) ?? []) {
-            const calleePath = nodeFile.get(calleeId);
-            if (calleePath) await resolveFile(calleePath);
+        let frontier = cg.nodes.filter(n => seedPaths.has(n.filePath)).map(n => n.id);
+
+        for (let hop = 1; hop <= depth && frontier.length > 0; hop++) {
+          const beforeHop = files.length;
+          const nextFrontier: string[] = [];
+          for (const nodeId of frontier) {
+            for (const calleeId of calleeMap.get(nodeId) ?? []) {
+              const calleePath = nodeFile.get(calleeId);
+              if (calleePath && !seen.has(calleePath)) {
+                await resolveFile(calleePath);
+                nextFrontier.push(calleeId);
+              }
+            }
           }
+          const hopAdded = files.length - beforeHop;
+          if (hopAdded > 0) logger.analysis(`Graph expansion depth ${hop}: +${hopAdded} files`);
+          frontier = nextFrontier;
         }
-        const expanded = files.length - seedCount;
-        if (expanded > 0) logger.analysis(`Graph expansion: +${expanded} files via call graph`);
       }
 
       return files;

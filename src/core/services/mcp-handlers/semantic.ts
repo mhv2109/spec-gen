@@ -180,6 +180,28 @@ export async function handleSearchCode(
     }
   }
 
+  // ── RIG-20: cross-graph spec traversal — seed → spec domains → peer functions ──
+  // For each result that has linkedSpecs, traverse the spec domain to find
+  // other functions in that domain not already in the semantic results.
+  type SpecPeer = { name: string; filePath: string; domain: string; requirement: string };
+  const specPeers: SpecPeer[] = [];
+  if (mappingIdx) {
+    const resultFileSet = new Set(results.map(r => r.record.filePath));
+    const seedDomains = new Set<string>();
+    for (const r of results) {
+      for (const spec of specsForFile(mappingIdx, r.record.filePath)) seedDomains.add(spec.domain);
+    }
+    const seen = new Set<string>();
+    for (const domain of seedDomains) {
+      for (const fn of functionsForDomain(mappingIdx, domain)) {
+        const key = `${fn.name}::${fn.file}`;
+        if (seen.has(key) || resultFileSet.has(fn.file)) continue;
+        seen.add(key);
+        specPeers.push({ name: fn.name, filePath: fn.file, domain, requirement: fn.requirement });
+      }
+    }
+  }
+
   return {
     query,
     searchMode,
@@ -202,6 +224,7 @@ export async function handleSearchCode(
       callers: callerMap?.get(r.record.id),
       callees: calleeMap?.get(r.record.id),
     })),
+    ...(specPeers.length > 0 ? { specLinkedFunctions: specPeers } : {}),
   };
 }
 

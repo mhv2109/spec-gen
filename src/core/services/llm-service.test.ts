@@ -359,6 +359,95 @@ describe('LLMService', () => {
         userPrompt: 'Give me data.',
       }, schema)).rejects.toThrow('Missing required field: value');
     });
+
+    it('should validate array schema rejects non-array response', async () => {
+      provider.setDefaultResponse('{"name": "test"}');
+
+      const schema = {
+        type: 'array',
+        items: { type: 'object', required: ['name'] },
+      };
+
+      await expect(service.completeJSON({
+        systemPrompt: 'Return JSON.',
+        userPrompt: 'Give me data.',
+      }, schema)).rejects.toThrow('Expected JSON array but received object');
+    });
+
+    it('should validate required fields in array items', async () => {
+      provider.setDefaultResponse('[{"name": "test"}, {"other": "val"}]');
+
+      const schema = {
+        type: 'array',
+        items: { type: 'object', required: ['name'] },
+      };
+
+      await expect(service.completeJSON({
+        systemPrompt: 'Return JSON.',
+        userPrompt: 'Give me data.',
+      }, schema)).rejects.toThrow('Missing required field in array item: name');
+    });
+
+    it('should pass valid array through array schema validation', async () => {
+      provider.setDefaultResponse('[{"name": "a"}, {"name": "b"}]');
+
+      const schema = {
+        type: 'array',
+        items: { type: 'object', required: ['name'] },
+      };
+
+      const result = await service.completeJSON<Array<{ name: string }>>({
+        systemPrompt: 'Return JSON.',
+        userPrompt: 'Give me data.',
+      }, schema);
+
+      expect(result).toEqual([{ name: 'a' }, { name: 'b' }]);
+    });
+
+    it('should append schema to system prompt when provided', async () => {
+      const calls: string[] = [];
+      provider.generateCompletion = async (request) => {
+        calls.push(request.systemPrompt);
+        return {
+          content: '[{"id": "1"}]',
+          usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+          model: 'mock',
+          finishReason: 'stop' as const,
+        };
+      };
+
+      const schema = { type: 'array', items: { type: 'object' } };
+
+      await service.completeJSON({
+        systemPrompt: 'Return JSON.',
+        userPrompt: 'Give me data.',
+      }, schema);
+
+      expect(calls[0]).toContain('MUST conform to this JSON Schema');
+      expect(calls[0]).toContain('"type":"array"');
+    });
+
+    it('should pass jsonSchema to provider via request', async () => {
+      const requests: CompletionRequest[] = [];
+      provider.generateCompletion = async (request) => {
+        requests.push(request);
+        return {
+          content: '[{"id": "1"}]',
+          usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+          model: 'mock',
+          finishReason: 'stop' as const,
+        };
+      };
+
+      const schema = { type: 'array', items: { type: 'object' } };
+
+      await service.completeJSON({
+        systemPrompt: 'Return JSON.',
+        userPrompt: 'Give me data.',
+      }, schema);
+
+      expect(requests[0].jsonSchema).toEqual(schema);
+    });
   });
 
   describe('Logging', () => {

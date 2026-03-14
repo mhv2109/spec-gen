@@ -225,6 +225,8 @@ export interface CompletionRequest {
   maxTokens?: number;
   stopSequences?: string[];
   responseFormat?: 'text' | 'json';
+  /** JSON Schema for structured output (used by OpenAI-compatible providers). */
+  jsonSchema?: object;
 }
 
 /**
@@ -651,7 +653,17 @@ export class OpenAIProvider implements LLMProvider {
       stop: request.stopSequences,
     };
 
-    if (request.responseFormat === 'json') {
+    if (request.responseFormat === 'json' && request.jsonSchema) {
+      // Use OpenAI structured outputs when a JSON schema is provided.
+      // This forces the model to conform to the schema (e.g. start an array). (#26)
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: 'response',
+          schema: request.jsonSchema,
+        },
+      };
+    } else if (request.responseFormat === 'json') {
       body.response_format = { type: 'json_object' };
     }
 
@@ -743,7 +755,15 @@ export class OpenAICompatibleProvider implements LLMProvider {
       ...(request.stopSequences && { stop: request.stopSequences }),
     };
 
-    if (request.responseFormat === 'json') {
+    if (request.responseFormat === 'json' && request.jsonSchema) {
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: {
+          name: 'response',
+          schema: request.jsonSchema,
+        },
+      };
+    } else if (request.responseFormat === 'json') {
       body.response_format = { type: 'json_object' };
     }
 
@@ -915,6 +935,7 @@ export class GeminiProvider implements LLMProvider {
         temperature: request.temperature ?? 0.3,
         maxOutputTokens: request.maxTokens ?? this.maxOutputTokens,
         ...(request.responseFormat === 'json' && { responseMimeType: 'application/json' }),
+        ...(request.responseFormat === 'json' && request.jsonSchema && { responseSchema: request.jsonSchema }),
         ...(request.stopSequences && { stopSequences: request.stopSequences }),
       },
     };
@@ -1199,11 +1220,18 @@ export class LLMService {
    * Generate a completion expecting JSON response
    */
   async completeJSON<T>(request: CompletionRequest, schema?: object): Promise<T> {
-    const jsonRequest = { ...request, responseFormat: 'json' as const };
+    const jsonRequest = { ...request, responseFormat: 'json' as const, jsonSchema: schema };
 
     // Add JSON instruction to prompt if not already present
     if (!jsonRequest.systemPrompt.toLowerCase().includes('json')) {
       jsonRequest.systemPrompt += '\n\nRespond with valid JSON only.';
+    }
+
+    // When a schema is provided, append it to the system prompt so the model
+    // knows the exact shape expected (especially that it must start an array).
+    // This addresses issue #26: without this, models may return a single object.
+    if (schema) {
+      jsonRequest.systemPrompt += `\n\nYour response MUST conform to this JSON Schema:\n${JSON.stringify(schema)}`;
     }
 
     const response = await this.complete(jsonRequest);
@@ -1345,9 +1373,24 @@ export class LLMService {
    * Simple schema validation
    */
   private validateSchema(data: unknown, schema: object): void {
-    // Simple type checking - in production use a proper JSON schema validator
     const schemaObj = schema as Record<string, unknown>;
-    if (schemaObj.type === 'object' && schemaObj.required && Array.isArray(schemaObj.required)) {
+
+    if (schemaObj.type === 'array') {
+      if (!Array.isArray(data)) {
+        throw new Error('Expected JSON array but received object');
+      }
+      // Validate each item against the items schema if provided
+      const itemsSchema = schemaObj.items as Record<string, unknown> | undefined;
+      if (itemsSchema?.required && Array.isArray(itemsSchema.required)) {
+        for (const item of data as Record<string, unknown>[]) {
+          for (const field of itemsSchema.required as string[]) {
+            if (!(field in item)) {
+              throw new Error(`Missing required field in array item: ${field}`);
+            }
+          }
+        }
+      }
+    } else if (schemaObj.type === 'object' && schemaObj.required && Array.isArray(schemaObj.required)) {
       const dataObj = data as Record<string, unknown>;
       for (const field of schemaObj.required) {
         if (!(field in dataObj)) {

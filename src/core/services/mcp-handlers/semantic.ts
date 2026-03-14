@@ -19,7 +19,7 @@ import {
   OPENSPEC_SPECS_SUBDIR,
 } from '../../../constants.js';
 import { fileExists } from '../../../utils/command-helpers.js';
-import { validateDirectory } from './utils.js';
+import { validateDirectory, loadMappingIndex, specsForFile, functionsForDomain } from './utils.js';
 import { readSpecGenConfig } from '../config-manager.js';
 
 // ============================================================================
@@ -110,7 +110,11 @@ export function compositeScore(semanticDistance: number, role: InsertionRole): n
 // ============================================================================
 
 /**
- * Semantic search over the vector index built by "spec-gen analyze --embed".
+ * MCP retrieval strategy: semantic search → graph neighborhood enrichment.
+ *
+ * Returns the top-k semantic results, each enriched with:
+ * - callers / callees from the call graph (graph-first context)
+ * - linkedSpecs from mapping.json (bidirectional code↔spec linking)
  */
 export async function handleSearchCode(
   directory: string,
@@ -149,7 +153,32 @@ export async function handleSearchCode(
   }
 
   limit = Math.max(1, Math.min(limit, 100));
-  const results = await VectorIndex.search(outputDir, query, embedSvc, { limit, language, minFanIn });
+  const { readCachedContext } = await import('./utils.js');
+  const [results, mappingIdx, llmCtx] = await Promise.all([
+    VectorIndex.search(outputDir, query, embedSvc, { limit, language, minFanIn }),
+    loadMappingIndex(absDir),
+    readCachedContext(absDir),
+  ]);
+
+  // Build graph adjacency for neighbourhood enrichment (MCP graph-first strategy)
+  type Neighbour = { name: string; filePath: string };
+  let callerMap: Map<string, Neighbour[]> | undefined;
+  let calleeMap: Map<string, Neighbour[]> | undefined;
+  if (llmCtx?.callGraph) {
+    const cg = llmCtx.callGraph;
+    const nodeMap = new Map(cg.nodes.map(n => [n.id, n]));
+    callerMap = new Map(cg.nodes.map(n => [n.id, [] as Neighbour[]]));
+    calleeMap = new Map(cg.nodes.map(n => [n.id, [] as Neighbour[]]));
+    for (const e of cg.edges) {
+      if (!e.calleeId) continue;
+      const caller = nodeMap.get(e.callerId);
+      const callee = nodeMap.get(e.calleeId);
+      if (caller && callee) {
+        calleeMap.get(e.callerId)?.push({ name: callee.name, filePath: callee.filePath });
+        callerMap.get(e.calleeId)?.push({ name: caller.name, filePath: caller.filePath });
+      }
+    }
+  }
 
   return {
     query,
@@ -166,6 +195,10 @@ export async function handleSearchCode(
       fanOut: r.record.fanOut,
       isHub: r.record.isHub,
       isEntryPoint: r.record.isEntryPoint,
+      linkedSpecs: mappingIdx ? specsForFile(mappingIdx, r.record.filePath) : undefined,
+      // Graph neighbourhood: callers and callees in the call graph
+      callers: callerMap?.get(r.record.id),
+      callees: calleeMap?.get(r.record.id),
     })),
   };
 }
@@ -316,7 +349,10 @@ export async function handleSearchSpecs(
   }
 
   limit = Math.max(1, Math.min(limit, 50));
-  const results = await SpecVectorIndex.search(outputDir, query, embedSvc, { limit, domain, section });
+  const [results, mappingIdx] = await Promise.all([
+    SpecVectorIndex.search(outputDir, query, embedSvc, { limit, domain, section }),
+    loadMappingIndex(absDir),
+  ]);
 
   return {
     query,
@@ -329,6 +365,7 @@ export async function handleSearchSpecs(
       title: r.record.title,
       text: r.record.text,
       linkedFiles: r.record.linkedFiles,
+      linkedFunctions: mappingIdx ? functionsForDomain(mappingIdx, r.record.domain) : undefined,
     })),
   };
 }

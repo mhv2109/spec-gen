@@ -29,6 +29,8 @@ export interface EmbeddingConfig {
   batchSize?: number;
   /** Disable SSL certificate verification (e.g. self-signed certs on local servers) */
   skipSslVerify?: boolean;
+  /** Number of texts per embedding batch (default 64) */
+  batchSize?: number;
 }
 
 export interface AnalysisConfig {

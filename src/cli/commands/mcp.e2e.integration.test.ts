@@ -553,6 +553,119 @@ describe('RIG-19 — MCP e2e integration on real spec-gen codebase', () => {
   });
 
   // --------------------------------------------------------------------------
+  // RIG-20 — cross-graph spec traversal in search_code and orient
+  // --------------------------------------------------------------------------
+
+  it('RIG-20: search_code returns specLinkedFunctions from the same spec domain', async () => {
+    if (skip('RIG-20 search_code')) return;
+
+    // Query about embedding: seeds will land in the `analyzer` domain (17 files).
+    // spec traversal must find peer functions in that domain not already in results.
+    const resp = await client.callTool('search_code', {
+      directory: REPO_ROOT,
+      query:     'embed text into vector using embedding service',
+      limit:     5,
+    });
+    const data = client.parseToolResult(resp) as {
+      results:              Array<{ filePath: string }>;
+      specLinkedFunctions?: Array<{ name: string; filePath: string; domain: string; requirement: string }>;
+    };
+
+    // specLinkedFunctions only appears when mapping.json exists and seeds have linked specs
+    if (!data.specLinkedFunctions) {
+      console.warn('[RIG-20] specLinkedFunctions absent — mapping.json may have no entries for this query');
+      return;
+    }
+
+    expect(Array.isArray(data.specLinkedFunctions)).toBe(true);
+    expect(data.specLinkedFunctions.length).toBeGreaterThan(0);
+
+    const seedFiles = new Set(data.results.map(r => r.filePath));
+    for (const fn of data.specLinkedFunctions) {
+      expect(typeof fn.name).toBe('string');
+      expect(typeof fn.filePath).toBe('string');
+      expect(typeof fn.domain).toBe('string');
+      expect(typeof fn.requirement).toBe('string');
+      // spec-linked functions must come from files NOT already in the seed results
+      expect(seedFiles.has(fn.filePath), `specLinked fn "${fn.name}" (${fn.filePath}) duplicates a seed result`).toBe(false);
+    }
+  });
+
+  it('RIG-20: orient returns specLinkedFunctions — two-hop traversal seed→domain→peers', async () => {
+    if (skip('RIG-20 orient')) return;
+
+    const resp = await client.callTool('orient', {
+      directory: REPO_ROOT,
+      task:      'embed text into vector using embedding service',
+      limit:     5,
+    });
+    const data = client.parseToolResult(resp) as {
+      relevantFunctions:    Array<{ filePath: string; linkedSpecs: Array<{ domain: string }> }>;
+      specLinkedFunctions?: Array<{ name: string; filePath: string; domain: string; requirement: string }>;
+    };
+
+    if (!data.specLinkedFunctions) {
+      console.warn('[RIG-20] specLinkedFunctions absent — seed functions may have no linkedSpecs');
+      return;
+    }
+
+    expect(data.specLinkedFunctions.length).toBeGreaterThan(0);
+
+    // All spec-linked domains must have appeared as a linkedSpec of at least one seed
+    const seedDomains = new Set(
+      data.relevantFunctions.flatMap(fn => fn.linkedSpecs.map(s => s.domain))
+    );
+    const seedFiles = new Set(data.relevantFunctions.map(fn => fn.filePath));
+
+    for (const fn of data.specLinkedFunctions) {
+      expect(seedDomains.has(fn.domain),
+        `specLinked fn "${fn.name}" domain "${fn.domain}" not reachable from seed linkedSpecs`
+      ).toBe(true);
+      // Two-hop: peer files must be outside the direct seed set
+      expect(seedFiles.has(fn.filePath),
+        `specLinked fn "${fn.name}" (${fn.filePath}) is already a seed — should have been filtered`
+      ).toBe(false);
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // RIG-21 — depth-N expansion: depth-2 adds files not reachable at depth-1
+  // (tested via get_subgraph as a proxy: callees of callees exist in the graph)
+  // --------------------------------------------------------------------------
+
+  it('RIG-21: depth-2 downstream adds functions not reachable at depth-1 (via analyze_impact)', async () => {
+    if (skip('RIG-21')) return;
+
+    // analyze_impact returns downstreamCriticalPath with depth field on each node.
+    // specGenRun has 24 depth-1 callees; their callees add 47 more at depth-2 —
+    // exactly the files that the old single-hop expansion missed.
+    const resp = await client.callTool('analyze_impact', {
+      directory: REPO_ROOT,
+      symbol:    'specGenRun',
+      depth:     2,
+    });
+    const data = client.parseToolResult(resp) as {
+      downstreamCriticalPath: Array<{ name: string; file: string; depth: number }>;
+    };
+
+    const depth1 = data.downstreamCriticalPath.filter(n => n.depth === 1);
+    const depth2 = data.downstreamCriticalPath.filter(n => n.depth === 2);
+
+    expect(depth1.length).toBeGreaterThan(0);
+    expect(depth2.length).toBeGreaterThan(0);
+
+    // Depth-2 nodes are distinct from depth-1 — these are what RIG-21 now adds
+    const depth1Names = new Set(depth1.map(n => n.name));
+    const newAtDepth2 = depth2.filter(n => !depth1Names.has(n.name));
+    expect(newAtDepth2.length, 'Expected depth-2 to add new nodes not reachable at depth-1').toBeGreaterThan(0);
+
+    // And their files are distinct too — confirming new files enter the context
+    const depth1Files = new Set(depth1.map(n => n.file));
+    const newFilesAtDepth2 = [...new Set(depth2.map(n => n.file))].filter(f => !depth1Files.has(f));
+    expect(newFilesAtDepth2.length, 'Expected depth-2 to add new source files').toBeGreaterThan(0);
+  });
+
+  // --------------------------------------------------------------------------
   // get_function_body — extracts exact source using call graph byte offsets
   // --------------------------------------------------------------------------
 

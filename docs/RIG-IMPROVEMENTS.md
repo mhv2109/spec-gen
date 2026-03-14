@@ -336,6 +336,104 @@ réponses (types corrects, pas de champs `undefined`, scores dans les bornes att
 
 ---
 
+## Phase 6 — GraphRAG profond
+
+GraphRAG opportunities identifiées après analyse de ce qu'on n'exploite pas encore.
+Toutes les données nécessaires existent déjà (call graph, spec index, mapping) — ce
+sont des changements de stratégie de retrieval, pas de collecte de données.
+
+### #20 — Traversée cross-graph code↔spec↔code (élevé)
+
+Le mapping `mapping.json` crée un pont bidirectionnel entre fonctions et sections de
+spec, mais on ne le *traverse* jamais. Une requête sur "rate limiting" pourrait
+automatiquement remonter : fonction → spec auth → spec session → fonctions session,
+sans que l'agent connaisse ces liens.
+
+**Objectif :** Dans `orient` et `search_code`, après la seed sémantique, traverser
+le mapping en deux sauts — fonction seed → domaine spec → autres fonctions de ce
+domaine. Remonte des implémentations liées sémantiquement via la spec même si le
+call graph ne les connecte pas.
+
+---
+
+### #21 — Graph expansion depth-N avec score decay (élevé)
+
+`semanticFiles()` et `suggest_insertion_points` s'arrêtent à depth-1. Une fonction
+à 2 sauts du résultat sémantique reste pertinente — juste moins. Le decay
+`score × λ^depth` (λ ≈ 0.6) permet d'inclure les implémentations qui délèguent
+via une couche intermédiaire sans noyer le contexte de résultats distants.
+
+**Objectif :** Paramétrer `depth` dans `semanticFiles()` et `suggest_insertion_points`,
+appliquer le decay sur le score de chaque nœud expansé. Limiter à depth=2 par défaut
+pour maîtriser la taille du contexte.
+
+---
+
+### #22 — Traversée du graphe de specs (spec→spec) (moyen)
+
+Chaque `spec.md` référence d'autres domaines dans son texte. On indexe les specs
+comme des documents indépendants. Parser ces références crée un deuxième graphe :
+une requête sur "authentication" pourrait tirer automatiquement les specs "session",
+"token" et "user" sans que l'utilisateur les nomme.
+
+**Objectif :** À la génération de `SpecVectorIndex`, détecter les références
+inter-domaines dans le texte (pattern `[domain]` ou lien Markdown) et les stocker
+comme `linkedDomains`. `search_specs` traverse ces liens pour enrichir les résultats
+(même logique que le mapping code↔spec, mais dans le graphe des specs).
+
+---
+
+### #23 — Context packing orienté communautés (moyen)
+
+RIG-3 chunke les fichiers individuellement aux frontières AST. Le LLM reçoit des
+fichiers en isolation — un handler sans son service, un service sans son repo. Des
+fonctions fortement couplées dans le call graph (même cluster structurel) devraient
+être groupées dans le même chunk LLM pour que le modèle voit un contexte cohérent.
+
+**Objectif :** Dans les stages 2/3/4, après la sélection sémantique des fichiers,
+re-grouper les fichiers par communauté du call graph (clusters déjà calculés dans
+`get_architecture_overview`) avant de construire les chunks LLM.
+
+---
+
+### #24 — Betweenness centrality comme signal de ranking (faible)
+
+Fan-in mesure "combien d'appelants". La betweenness mesure "combien de plus courts
+chemins passent par moi". Un nœud avec fan-in modéré mais haute betweenness est un
+chokepoint architectural plus critique que fan-in seul ne le suggère.
+
+**Objectif :** Calculer la betweenness approximée (via BFS sampling) à la fin de
+`call-graph.ts`, stocker dans `FunctionNode.betweenness`, exposer dans
+`get_critical_hubs` et l'index vectoriel comme signal de ranking supplémentaire.
+
+---
+
+### #25 — Bridge finding bidirectionnel (faible)
+
+On fait soit l'expansion upstream (callers), soit downstream (callees), jamais les
+deux simultanément. Les fonctions "bridge" — downstream d'une seed sémantique ET
+upstream d'un entry point connu — sont exactement sur le chemin d'exécution pertinent.
+
+**Objectif :** Dans `suggest_insertion_points`, après l'expansion depth-1, intersecter
+les callees des seeds avec les callers des entry points pour identifier les bridges.
+Les scorer en bonus (ils sont sur un chemin critique, pas juste proches sémantiquement).
+
+---
+
+### #26 — Co-change graph (git history) (faible)
+
+Des fonctions qui changent ensemble dans les commits sont couplées sémantiquement
+même si le call graph ne les connecte pas (ex : un handler et son test, un modèle
+et son sérialiseur). Git log est un deuxième graphe de dépendances qu'on n'exploite
+pas.
+
+**Objectif :** À l'analyze, extraire les co-changements fréquents (fichiers qui
+apparaissent ensemble dans > N commits des 6 derniers mois) via `git log --name-only`.
+Stocker comme `coChangePeers` dans le contexte. `search_code` et `orient` peuvent
+ajouter ces peers comme candidats supplémentaires avec score décoté.
+
+---
+
 ## Tableau récapitulatif
 
 | # | Lacune | Phase | Impact | Statut |
@@ -359,3 +457,10 @@ réponses (types corrects, pas de champs `undefined`, scores dans les bornes att
 | 17 | Pipeline e2e sur vrai dépôt open source | 5 | **Élevé** | ✅ |
 | 18 | Tests de régression formalisés | 5 | **Élevé** | ✅ |
 | 19 | Tests MCP bout en bout sur données réelles | 5 | **Moyen** | ✅ |
+| 20 | Traversée cross-graph code↔spec↔code | 6 | **Élevé** | — |
+| 21 | Graph expansion depth-N avec score decay | 6 | **Élevé** | — |
+| 22 | Traversée du graphe de specs (spec→spec) | 6 | **Moyen** | — |
+| 23 | Context packing orienté communautés | 6 | **Moyen** | — |
+| 24 | Betweenness centrality comme signal de ranking | 6 | **Faible** | — |
+| 25 | Bridge finding bidirectionnel | 6 | **Faible** | — |
+| 26 | Co-change graph (git history) | 6 | **Faible** | — |

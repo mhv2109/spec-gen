@@ -13,10 +13,20 @@ import type { SerializedCallGraph } from '../analyzer/call-graph.js';
 
 vi.mock('chokidar', () => ({
   default: {
-    watch: vi.fn(() => ({
-      on: vi.fn().mockReturnThis(),
-      close: vi.fn().mockResolvedValue(undefined),
-    })),
+    watch: vi.fn(() => {
+      const handlers = new Map<string, ((...args: unknown[]) => void)[]>();
+      const watcher = {
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          if (!handlers.has(event)) handlers.set(event, []);
+          handlers.get(event)!.push(handler);
+          // Fire 'ready' synchronously so start() resolves in tests
+          if (event === 'ready') handler();
+          return watcher;
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      return watcher;
+    }),
   },
 }));
 

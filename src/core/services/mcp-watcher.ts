@@ -74,17 +74,22 @@ export class McpWatcher {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    this.fsWatcher = chokidar.watch(this.rootPath, {
-      ignored: this.ignore,
-      persistent: true,
-      ignoreInitial: true,
-      awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
-    });
+    await new Promise<void>((resolve, reject) => {
+      this.fsWatcher = chokidar.watch(this.rootPath, {
+        ignored: this.ignore,
+        persistent: true,
+        ignoreInitial: true,
+        awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+      });
 
-    this.fsWatcher.on('change', (absPath: string) => {
-      if (SOURCE_EXTENSIONS.test(absPath)) {
-        this.scheduleChange(absPath);
-      }
+      this.fsWatcher.on('change', (absPath: string) => {
+        if (SOURCE_EXTENSIONS.test(absPath)) {
+          this.scheduleChange(absPath);
+        }
+      });
+
+      this.fsWatcher.on('ready', () => resolve());
+      this.fsWatcher.on('error', (err) => reject(err));
     });
 
     process.stderr.write(

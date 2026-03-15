@@ -255,6 +255,7 @@ describe('specsForFile', () => {
   it('returns spec entries for a file', () => {
     const entry = {
       requirement: 'Login',
+      service: '',
       domain: 'auth',
       specFile: 'openspec/specs/auth/spec.md',
       functions: [],
@@ -268,7 +269,7 @@ describe('specsForFile', () => {
   });
 
   it('deduplicates entries with same domain+requirement', () => {
-    const entry = { requirement: 'Login', domain: 'auth', specFile: 'auth.md', functions: [] };
+    const entry = { requirement: 'Login', service: '', domain: 'auth', specFile: 'auth.md', functions: [] };
     const byFile = new Map([['src/auth.ts', [entry, entry]]]);
     const index = { byFile, byDomain: new Map(), entries: [entry] };
     const specs = specsForFile(index, 'src/auth.ts');
@@ -285,6 +286,7 @@ describe('functionsForDomain', () => {
   it('returns functions for a domain, skipping wildcard entries', () => {
     const entry = {
       requirement: 'Auth flow',
+      service: '',
       domain: 'auth',
       specFile: 'auth.md',
       functions: [

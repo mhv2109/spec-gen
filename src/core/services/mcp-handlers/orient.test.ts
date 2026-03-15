@@ -81,6 +81,8 @@ function makeSearchResult(overrides: Partial<{
       fanOut: overrides.fanOut ?? 3,
       isHub: false,
       isEntryPoint: false,
+      text: '',
+      className: '',
     },
   };
 }
@@ -166,7 +168,7 @@ describe('handleOrient', () => {
     ]);
     // functionsForDomain returns a peer in a DIFFERENT file (not in seed file set)
     vi.mocked(functionsForDomain).mockReturnValue([
-      { name: 'logout', file: 'src/session.ts', requirement: 'Logout' },
+      { name: 'logout', file: 'src/session.ts', line: 0, kind: 'function', confidence: 'high', requirement: 'Logout' },
     ]);
 
     const result = await handleOrient('/tmp/proj', 'login task') as Record<string, unknown>;

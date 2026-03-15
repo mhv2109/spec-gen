@@ -28,9 +28,9 @@ function makeCallGraph(overrides: Partial<SerializedCallGraph> = {}): Serialized
 
 function makeContext(cg?: SerializedCallGraph): LLMContext {
   return {
-    phase1_survey: { files: [], totalTokens: 0 },
-    phase2_deep: { files: [], totalTokens: 0 },
-    phase3_validation: { files: [], totalTokens: 0 },
+    phase1_survey: { purpose: '', files: [], totalTokens: 0 },
+    phase2_deep: { purpose: '', files: [], totalTokens: 0 },
+    phase3_validation: { purpose: '', files: [], totalTokens: 0 },
     callGraph: cg,
   };
 }
@@ -131,7 +131,7 @@ describe('generateCodebaseDigest', () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'digest-test-'));
     const cg = makeCallGraph({
       layerViolations: [
-        { callerId: 'a::fn', calleeId: 'b::fn', callerLayer: 'api', calleeLayer: 'db', confidence: 'name_only' },
+        { callerId: 'a::fn', calleeId: 'b::fn', callerLayer: 'api', calleeLayer: 'db', reason: 'name_only' },
       ],
     });
 

@@ -206,6 +206,130 @@ describe('McpWatcher.handleChange', () => {
   });
 });
 
+// ── reEmbed paths ─────────────────────────────────────────────────────────────
+
+describe('McpWatcher.reEmbed', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('skips re-embed and logs when no embedding service is available', async () => {
+    const cg = makeCallGraph();
+    const ctx = makeContext({ callGraph: cg });
+    const { rootPath, outputPath } = await setupProject(ctx);
+
+    // Write a fake vector index marker so VectorIndex.exists returns true
+    await mkdir(join(outputPath, 'vector-index'), { recursive: true });
+    await writeFile(join(outputPath, 'vector-index', '.keep'), '', 'utf-8');
+
+    vi.doMock('../analyzer/vector-index.js', () => ({
+      VectorIndex: { exists: vi.fn().mockReturnValue(true), build: vi.fn() },
+    }));
+    vi.doMock('../analyzer/embedding-service.js', () => ({
+      EmbeddingService: {
+        fromEnv: vi.fn().mockImplementation(() => { throw new Error('no EMBED_BASE_URL'); }),
+        fromConfig: vi.fn().mockReturnValue(null),
+      },
+    }));
+    vi.doMock('./config-manager.js', () => ({
+      readSpecGenConfig: vi.fn().mockResolvedValue(null),
+    }));
+
+    const srcFile = join(rootPath, 'index.ts');
+    await writeFile(srcFile, 'export function foo() {}', 'utf-8');
+
+    const { McpWatcher } = await import('./mcp-watcher.js');
+    const watcher = new McpWatcher({ rootPath, outputPath });
+    await watcher.handleChange(srcFile);
+
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('no embedding service'),
+    );
+  });
+
+  it('calls VectorIndex.build and logs when embedding succeeds', async () => {
+    const cg = makeCallGraph();
+    const ctx = makeContext({ callGraph: cg });
+    const { rootPath, outputPath } = await setupProject(ctx);
+
+    const mockBuild = vi.fn().mockResolvedValue({ embedded: 3, reused: 1 });
+    const mockEmbedSvc = {};
+
+    vi.doMock('../analyzer/vector-index.js', () => ({
+      VectorIndex: { exists: vi.fn().mockReturnValue(true), build: mockBuild },
+    }));
+    vi.doMock('../analyzer/embedding-service.js', () => ({
+      EmbeddingService: {
+        fromEnv: vi.fn().mockReturnValue(mockEmbedSvc),
+        fromConfig: vi.fn(),
+      },
+    }));
+    vi.doMock('./config-manager.js', () => ({
+      readSpecGenConfig: vi.fn().mockResolvedValue(null),
+    }));
+
+    const srcFile = join(rootPath, 'index.ts');
+    await writeFile(srcFile, 'export function foo() {}', 'utf-8');
+
+    const { McpWatcher } = await import('./mcp-watcher.js');
+    const watcher = new McpWatcher({ rootPath, outputPath });
+    await watcher.handleChange(srcFile);
+
+    expect(mockBuild).toHaveBeenCalledWith(
+      outputPath,
+      cg.nodes,
+      expect.any(Array),
+      expect.any(Set),
+      expect.any(Set),
+      mockEmbedSvc,
+      expect.any(Map),
+      true,
+    );
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('re-embedded'),
+    );
+  });
+
+  it('logs embed error and does not throw when VectorIndex.build throws', async () => {
+    const cg = makeCallGraph();
+    const ctx = makeContext({ callGraph: cg });
+    const { rootPath, outputPath } = await setupProject(ctx);
+
+    vi.doMock('../analyzer/vector-index.js', () => ({
+      VectorIndex: {
+        exists: vi.fn().mockReturnValue(true),
+        build: vi.fn().mockRejectedValue(new Error('LanceDB connection failed')),
+      },
+    }));
+    vi.doMock('../analyzer/embedding-service.js', () => ({
+      EmbeddingService: {
+        fromEnv: vi.fn().mockReturnValue({}),
+        fromConfig: vi.fn(),
+      },
+    }));
+    vi.doMock('./config-manager.js', () => ({
+      readSpecGenConfig: vi.fn().mockResolvedValue(null),
+    }));
+
+    const srcFile = join(rootPath, 'index.ts');
+    await writeFile(srcFile, 'export function foo() {}', 'utf-8');
+
+    const { McpWatcher } = await import('./mcp-watcher.js');
+    const watcher = new McpWatcher({ rootPath, outputPath });
+    await expect(watcher.handleChange(srcFile)).resolves.not.toThrow();
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('embed error'),
+    );
+  });
+});
+
 // ── Debounce ──────────────────────────────────────────────────────────────────
 
 describe('McpWatcher debounce', () => {

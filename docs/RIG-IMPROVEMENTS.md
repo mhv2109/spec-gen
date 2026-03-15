@@ -432,6 +432,39 @@ apparaissent ensemble dans > N commits des 6 derniers mois) via `git log --name-
 Stocker comme `coChangePeers` dans le contexte. `search_code` et `orient` peuvent
 ajouter ces peers comme candidats supplémentaires avec score décoté.
 
+**Signal de débogage :** Pour un bug donné, les co-change peers sont la réponse à
+"où est-ce qu'on a déjà touché quand on a corrigé ça la dernière fois ?" — une
+information que le call graph seul ne peut pas donner.
+
+---
+
+### #27 — `trace_execution_path(entry, target)` — débogage par chemin d'exécution (moyen)
+
+**Contexte :** Le GraphRAG est naturellement adapté à l'investigation de bugs.
+`orient("NullPointerException in payment flow")` trouve les fichiers pertinents,
+`analyze_impact` donne le rayon de blast, RIG-20 remonte les fonctions du même
+domaine spec pour trouver des patterns similaires. Mais il manque un outil pour
+répondre à "comment la requête X atteint-elle la fonction Y ?"
+
+**Objectif :** `trace_execution_path(directory, entryFunction, targetFunction)` —
+trouve tous les chemins dans le call graph entre deux fonctions (BFS/DFS borné).
+Retourne les chemins ordonnés par longueur, avec signature de chaque nœud intermédiaire.
+
+**Usage type :**
+```
+trace_execution_path("processOrder", "chargeCard")
+→ processOrder → validateCart → applyDiscounts → chargeCard (3 sauts)
+→ processOrder → retryPayment → chargeCard (2 sauts)
+```
+
+Un agent de débogage peut ainsi identifier quelle branche d'exécution a produit
+l'erreur, sans lire chaque fichier de la chaîne manuellement.
+
+**Implémentation :**
+- Handler : `src/core/services/mcp-handlers/graph.ts`
+- BFS depuis `entryFunction` dans `callGraph.edges`, s'arrête à `targetFunction` ou profondeur max (configurable, défaut 6)
+- Limiter à 10 chemins max pour éviter l'explosion combinatoire sur les graphes denses
+
 ---
 
 ## Tableau récapitulatif
@@ -464,3 +497,4 @@ ajouter ces peers comme candidats supplémentaires avec score décoté.
 | 24 | Betweenness centrality comme signal de ranking | 6 | **Faible** | — |
 | 25 | Bridge finding bidirectionnel | 6 | **Faible** | — |
 | 26 | Co-change graph (git history) | 6 | **Faible** | — |
+| 27 | `trace_execution_path` — débogage par chemin d'exécution | 6 | **Moyen** | ✅ |

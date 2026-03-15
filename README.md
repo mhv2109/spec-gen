@@ -620,6 +620,38 @@ or for local development:
 
 **Cline / Roo Code / Kilocode** -- add the same block under `mcpServers` in the MCP settings JSON of your editor.
 
+### Watch mode (keep search_code and orient fresh)
+
+By default the MCP server reads `llm-context.json` from the last `analyze` run. With `--watch-auto`, it also watches source files for changes and incrementally re-indexes signatures so `search_code` and `orient` reflect your latest edits without waiting for the next commit.
+
+Add `--watch-auto` to your MCP config args:
+
+```json
+{
+  "mcpServers": {
+    "spec-gen": {
+      "command": "spec-gen",
+      "args": ["mcp", "--watch-auto"]
+    }
+  }
+}
+```
+
+The watcher starts automatically on the first tool call — no hardcoded path needed. It re-extracts signatures for any changed source file and patches `llm-context.json` within ~500 ms of a save. The call graph is not rebuilt on every change; it stays current via the [post-commit hook](#cicd-integration) (`spec-gen analyze --force --embed`).
+
+If you also want the vector index to re-embed changed functions in real time (requires the [embedding server](./README.md#embedding-configuration)):
+
+```json
+{ "args": ["mcp", "--watch-auto", "--watch-embed"] }
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--watch-auto` | off | Auto-detect project root from first tool call |
+| `--watch <dir>` | — | Watch a fixed directory (alternative to `--watch-auto`) |
+| `--watch-embed` | off | Re-embed changed functions into the vector index |
+| `--watch-debounce <ms>` | 400 | Delay before re-indexing after a file change |
+
 ### Cline / Roo Code / Kilocode
 
 For editors with MCP support, after adding the `mcpServers` block to your settings, download the slash command workflows:

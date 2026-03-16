@@ -32,7 +32,7 @@ import {
   detectDrift,
 } from '../../drift/index.js';
 import { readSpecGenConfig } from '../config-manager.js';
-import { validateDirectory, readCachedContext, isCacheFresh } from './utils.js';
+import { validateDirectory, readCachedContext, isCacheFresh, safeJoin } from './utils.js';
 import type { SerializedCallGraph } from '../../analyzer/call-graph.js';
 import type { MappingArtifact } from '../../generator/mapping-generator.js';
 import type { DriftResult } from '../../../types/index.js';
@@ -356,7 +356,7 @@ export async function handleGetFunctionSkeleton(
   filePath: string
 ): Promise<unknown> {
   const absDir = await validateDirectory(directory);
-  const absFile = join(absDir, filePath);
+  const absFile = safeJoin(absDir, filePath);
 
   let source: string;
   try {
@@ -395,7 +395,7 @@ export async function handleGetFunctionBody(
   functionName: string,
 ): Promise<unknown> {
   const absDir = await validateDirectory(directory);
-  const absFile = join(absDir, filePath);
+  const absFile = safeJoin(absDir, filePath);
 
   let source: string;
   try {

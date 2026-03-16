@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import {
   validateDirectory,
   sanitizeMcpError,
+  safeJoin,
   readCachedContext,
   isCacheFresh,
   loadMappingIndex,
@@ -111,6 +112,34 @@ describe('sanitizeMcpError', () => {
   it('leaves messages without secrets unchanged', () => {
     const msg = 'Something went wrong with the pipeline';
     expect(sanitizeMcpError(new Error(msg))).toBe(msg);
+  });
+});
+
+// ============================================================================
+// safeJoin
+// ============================================================================
+
+describe('safeJoin', () => {
+  it('resolves a relative path within the project root', () => {
+    const result = safeJoin('/projects/myapp', 'src/auth.ts');
+    expect(result).toBe('/projects/myapp/src/auth.ts');
+  });
+
+  it('throws on path traversal via ../', () => {
+    expect(() => safeJoin('/projects/myapp', '../../etc/passwd')).toThrow('Path traversal blocked');
+  });
+
+  it('throws on absolute path outside project root', () => {
+    expect(() => safeJoin('/projects/myapp', '/etc/passwd')).toThrow('Path traversal blocked');
+  });
+
+  it('allows nested paths within project root', () => {
+    const result = safeJoin('/projects/myapp', 'src/core/services/mcp-handlers/utils.ts');
+    expect(result).toBe('/projects/myapp/src/core/services/mcp-handlers/utils.ts');
+  });
+
+  it('blocks traversal that starts within root but escapes', () => {
+    expect(() => safeJoin('/projects/myapp', 'src/../../other/file.ts')).toThrow('Path traversal blocked');
   });
 });
 

@@ -671,7 +671,7 @@ Add `--watch-auto` to your MCP config args:
 }
 ```
 
-The watcher starts automatically on the first tool call — no hardcoded path needed. It re-extracts signatures for any changed source file and patches `llm-context.json` within ~500 ms of a save. If an embedding server is reachable, it also re-embeds changed functions into the vector index automatically. The call graph is not rebuilt on every change; it stays current via the [post-commit hook](#cicd-integration) (`spec-gen analyze --force --embed`).
+The watcher starts automatically on the first tool call — no hardcoded path needed. It re-extracts signatures for any changed source file and patches `llm-context.json` within ~500 ms of a save. If an embedding server is reachable, it also re-embeds changed functions into the vector index automatically. The call graph is not rebuilt on every change; it stays current via the [post-commit hook](#cicd-integration) (`spec-gen analyze --force`).
 
 | Option | Default | Description |
 |---|---|---|
@@ -754,15 +754,15 @@ All tools run on **pure static analysis** -- no LLM quota consumed.
 
 | Tool | Description | Requires prior analysis |
 |------|-------------|:---:|
-| `orient` | **Single entry point for any new task.** Given a natural-language task description, returns in one call: relevant functions, source files, spec domains, call neighbourhoods, insertion-point candidates, and matching spec sections. Start here. | Yes (+ `--embed`) |
+| `orient` | **Single entry point for any new task.** Given a natural-language task description, returns in one call: relevant functions, source files, spec domains, call neighbourhoods, insertion-point candidates, and matching spec sections. Start here. | Yes (+ embedding) |
 | `get_subgraph` | Depth-limited subgraph centred on a function. Direction: `downstream` (what it calls), `upstream` (who calls it), or `both`. Output as JSON or Mermaid diagram. | Yes |
 | `get_architecture_overview` | High-level cluster map: roles (entry layer, orchestrator, core utilities, API layer, internal), inter-cluster dependencies, global entry points, and critical hubs. No LLM required. | Yes |
 | `get_function_skeleton` | Noise-stripped view of a source file: logs, inline comments, and non-JSDoc block comments removed. Signatures, control flow, return/throw, and call expressions preserved. Returns reduction %. | No |
 | `get_function_body` | Return the exact source code of a named function in a file. | No |
 | `get_file_dependencies` | Return the file-level import dependencies for a given source file (imports, imported-by, or both). | Yes |
 | `trace_execution_path` | Find all call-graph paths between two functions (DFS, configurable depth/max-paths). Use this when debugging: "how does request X reach function Y?" Returns shortest path, all paths sorted by hops, and a step-by-step chain per path. | Yes |
-| `suggest_insertion_points` | Semantic search over the vector index to find the best existing functions to extend or hook into when implementing a new feature. Returns ranked candidates with role and strategy. Falls back to BM25 keyword search when no embedding server is configured. | Yes (+ `--embed`) |
-| `search_code` | Natural-language semantic search over indexed functions. Returns the closest matches by meaning with similarity score, call-graph neighbourhood enrichment, and spec-linked peer functions. Falls back to BM25 keyword search when no embedding server is configured. | Yes (+ `--embed`) |
+| `suggest_insertion_points` | Semantic search over the vector index to find the best existing functions to extend or hook into when implementing a new feature. Returns ranked candidates with role and strategy. Falls back to BM25 keyword search when no embedding server is configured. | Yes (+ embedding) |
+| `search_code` | Natural-language semantic search over indexed functions. Returns the closest matches by meaning with similarity score, call-graph neighbourhood enrichment, and spec-linked peer functions. Falls back to BM25 keyword search when no embedding server is configured. | Yes (+ embedding) |
 
 **Specs**
 
@@ -879,6 +879,41 @@ directory  string   Absolute path to the project directory
 ```
 directory  string   Absolute path to the project directory
 filePath   string   Path to the file, relative to the project directory
+```
+
+**`get_function_body`**
+```
+directory     string   Absolute path to the project directory
+filePath      string   Path to the file, relative to the project directory
+functionName  string   Name of the function to extract
+```
+
+**`get_file_dependencies`**
+```
+directory  string   Absolute path to the project directory
+filePath   string   Path to the file, relative to the project directory
+direction  string   "imports" | "importedBy" | "both"  (default: "both")
+```
+
+**`trace_execution_path`**
+```
+directory       string   Absolute path to the project directory
+entryFunction   string   Name of the starting function (case-insensitive partial match)
+targetFunction  string   Name of the target function (case-insensitive partial match)
+maxDepth        number   Maximum path length in hops (default: 6)
+maxPaths        number   Maximum number of paths to return (default: 10, max: 50)
+```
+
+**`get_decisions`**
+```
+directory  string   Absolute path to the project directory
+query      string   Optional keyword to filter ADRs by title or content
+```
+
+**`get_spec`**
+```
+directory  string   Absolute path to the project directory
+domain     string   Domain name (e.g. "auth", "user", "api")
 ```
 
 **`get_god_functions`**
@@ -1101,8 +1136,8 @@ EMBED_BASE_URL=https://api.openai.com/v1
 EMBED_MODEL=text-embedding-3-small
 EMBED_API_KEY=sk-...         # optional for local servers
 
-# Then run:
-spec-gen analyze --embed
+# Then run (embedding is automatic when configured):
+spec-gen analyze
 ```
 
 **Config file (`.spec-gen/config.json`):**
@@ -1297,11 +1332,11 @@ for (const [key, req] of Object.entries(requirements)) {
 npm install          # Install dependencies
 npm run dev          # Development mode (watch)
 npm run build        # Build
-npm run test:run     # Run tests (1526 unit tests)
+npm run test:run     # Run tests (2000+ unit tests)
 npm run typecheck    # Type check
 ```
 
-1526 unit tests covering static analysis, call graph, refactor analysis, spec mapping, drift detection, LLM enhancement, ADR generation, and the full CLI.
+2000+ unit tests covering static analysis, call graph, refactor analysis, spec mapping, drift detection, LLM enhancement, ADR generation, MCP handlers, and the full CLI.
 
 ## Links
 

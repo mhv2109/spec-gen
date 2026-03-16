@@ -3,7 +3,7 @@
  */
 
 import { readFile, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import type { LLMContext } from '../../analyzer/artifact-generator.js';
 import { ANALYSIS_STALE_THRESHOLD_MS, SPEC_GEN_DIR, SPEC_GEN_ANALYSIS_SUBDIR, ARTIFACT_LLM_CONTEXT } from '../../../constants.js';
 
@@ -43,6 +43,19 @@ export function sanitizeMcpError(err: unknown): string {
     .replace(/Bearer\s+\S{10,}/g, 'Bearer [REDACTED]')
     .replace(/Authorization:\s*\S+/gi, 'Authorization: [REDACTED]')
     .replace(/api[_-]?key[=:]\s*\S{8,}/gi, 'api_key=[REDACTED]');
+}
+
+/**
+ * Resolve a user-supplied relative file path against a validated project root
+ * and ensure the result stays within that root. Prevents path traversal via
+ * `../` sequences.
+ */
+export function safeJoin(absDir: string, filePath: string): string {
+  const resolved = resolve(absDir, filePath);
+  if (!resolved.startsWith(absDir + sep) && resolved !== absDir) {
+    throw new Error(`Path traversal blocked: "${filePath}" resolves outside project directory`);
+  }
+  return resolved;
 }
 
 export async function readCachedContext(directory: string): Promise<LLMContext | null> {

@@ -368,6 +368,55 @@ describe('McpWatcher debounce', () => {
   });
 });
 
+describe('McpWatcher reschedule-when-busy', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('reschedules a change instead of dropping it when busy', async () => {
+    const { McpWatcher } = await import('./mcp-watcher.js');
+    const watcher = new McpWatcher({ rootPath: '/tmp/proj', debounceMs: 100 });
+
+    // Make handleChange block until we resolve it
+    let resolveFirst!: () => void;
+    const firstCall = new Promise<void>(r => { resolveFirst = r; });
+    let callCount = 0;
+    vi.spyOn(watcher, 'handleChange').mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) await firstCall;
+    });
+
+    const schedule = (watcher as unknown as { scheduleChange(p: string): void }).scheduleChange.bind(watcher);
+
+    // First change — will start processing after debounce
+    schedule('/tmp/proj/src/a.ts');
+    await vi.advanceTimersByTimeAsync(100);
+    // handleChange is now running (blocked on firstCall)
+    expect(callCount).toBe(1);
+
+    // Second change arrives while busy — should be rescheduled, not dropped
+    schedule('/tmp/proj/src/a.ts');
+    await vi.advanceTimersByTimeAsync(100);
+    // Still blocked — rescheduled change fires but sees busy, reschedules again
+    expect(callCount).toBe(1);
+
+    // Unblock first handleChange
+    resolveFirst();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Rescheduled change should now have fired
+    expect(callCount).toBe(2);
+  });
+});
+
 // ── start / stop ──────────────────────────────────────────────────────────────
 
 describe('McpWatcher start/stop', () => {

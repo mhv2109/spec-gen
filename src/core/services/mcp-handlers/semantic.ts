@@ -37,7 +37,7 @@ export type InsertionStrategy =
 export interface InsertionCandidate {
   rank: number;
   score: number;
-  semanticDistance: number;
+  semanticScore: number;
   name: string;
   filePath: string;
   className?: string;
@@ -92,9 +92,15 @@ export function buildReason(
   }
 }
 
-/** Composite score = semantic * INSERTION_SEMANTIC_WEIGHT + structuralBonus * INSERTION_STRUCTURAL_WEIGHT */
-export function compositeScore(semanticDistance: number, role: InsertionRole): number {
-  const semantic = Math.max(0, 1 - semanticDistance);
+/**
+ * Composite score = semanticRelevance * INSERTION_SEMANTIC_WEIGHT + structuralBonus * INSERTION_STRUCTURAL_WEIGHT.
+ *
+ * `semanticRelevance` must be in the 0-1 range (higher = more relevant).
+ * Callers using VectorIndex.search (hybrid/RRF or BM25) should normalise scores
+ * into [0, 1] before calling this function.
+ */
+export function compositeScore(semanticRelevance: number, role: InsertionRole): number {
+  const semantic = Math.max(0, Math.min(1, semanticRelevance));
   const structuralBonus: Record<InsertionRole, number> = {
     entry_point:  INSERTION_ROLE_BONUS_ENTRY_POINT,
     orchestrator: INSERTION_ROLE_BONUS_ORCHESTRATOR,
@@ -273,14 +279,18 @@ export async function handleSuggestInsertionPoints(
     readCachedContext(absDir),
   ]);
 
+  // Normalise search scores to [0, 1] for compositeScore (scores are RRF/BM25: higher = better)
+  const maxScore = rawResults.length > 0 ? Math.max(...rawResults.map(r => r.score)) : 1;
+  const normalise = (s: number) => maxScore > 0 ? s / maxScore : 0;
+
   const candidates: InsertionCandidate[] = rawResults.map(r => {
     const role     = classifyRole(r.record.fanIn, r.record.fanOut, r.record.isHub, r.record.isEntryPoint);
     const strategy = deriveStrategy(role);
-    const score    = compositeScore(r.score, role);
+    const score    = compositeScore(normalise(r.score), role);
     return {
       rank: 0,
       score,
-      semanticDistance: r.score,
+      semanticScore: r.score,
       name: r.record.name,
       filePath: r.record.filePath,
       className: r.record.className || undefined,
@@ -328,7 +338,7 @@ export async function handleSuggestInsertionPoints(
         candidates.push({
           rank: 0,
           score,
-          semanticDistance: seedResult.score + 0.15,
+          semanticScore: seedResult.score + 0.15,
           name: callerNode.name,
           filePath: callerNode.filePath,
           className: callerNode.className,

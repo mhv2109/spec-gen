@@ -130,6 +130,19 @@ describe('handleOrient', () => {
     expect((result.relevantFunctions as unknown[]).length).toBeGreaterThan(0);
   });
 
+  it('preserves raw score (higher = better) without inverting via 1 - score', async () => {
+    vi.mocked(VectorIndex.exists).mockReturnValue(true);
+    vi.mocked(VectorIndex.search).mockResolvedValue([
+      makeSearchResult({ name: 'topResult', filePath: 'src/top.ts' }),
+    ]);
+
+    const result = await handleOrient('/tmp/proj', 'test task') as Record<string, unknown>;
+    const fns = result.relevantFunctions as Array<{ score: number; name: string }>;
+    expect(fns.length).toBe(1);
+    // Raw score from mock is 0.2 — should be preserved, NOT inverted to 0.8
+    expect(fns[0].score).toBe(0.2);
+  });
+
   it('returns empty collections when search returns no results', async () => {
     vi.mocked(VectorIndex.exists).mockReturnValue(true);
     vi.mocked(VectorIndex.search).mockResolvedValue([]);

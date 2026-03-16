@@ -85,7 +85,7 @@ export class McpWatcher {
       });
 
       this.fsWatcher.on('ready', () => resolve());
-      this.fsWatcher.on('error', (err) => reject(err));
+      this.fsWatcher.on('error', (err: unknown) => reject(err));
     });
 
     process.stderr.write(`[mcp-watcher] watching ${this.rootPath}\n`);
@@ -106,7 +106,11 @@ export class McpWatcher {
 
     const t = setTimeout(() => {
       this.timers.delete(absPath);
-      if (this.running) return;          // serialise; drop if busy
+      if (this.running) {
+        // Re-schedule instead of dropping — ensures no changes are lost
+        this.scheduleChange(absPath);
+        return;
+      }
       this.running = true;
       this.handleChange(absPath)
         .catch(err => process.stderr.write(`[mcp-watcher] error: ${(err as Error).message}\n`))
@@ -191,8 +195,8 @@ export class McpWatcher {
       }
 
       const cg = context.callGraph!;
-      const hubIds    = new Set(cg.hubFunctions.map(f => f.id));
-      const entryIds  = new Set(cg.entryPoints.map(f => f.id));
+      const hubIds    = new Set((cg.hubFunctions ?? []).map(f => f.id));
+      const entryIds  = new Set((cg.entryPoints ?? []).map(f => f.id));
       const fileContents = new Map([[rel, content]]);
 
       const { embedded, reused } = await VectorIndex.build(

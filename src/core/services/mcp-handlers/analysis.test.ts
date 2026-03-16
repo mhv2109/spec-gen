@@ -27,11 +27,15 @@ import {
 // MODULE MOCKS
 // ============================================================================
 
-vi.mock('./utils.js', () => ({
-  validateDirectory: vi.fn(async (dir: string) => dir),
-  readCachedContext: vi.fn(async () => null),
-  isCacheFresh: vi.fn(async () => false),
-}));
+vi.mock('./utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./utils.js')>();
+  return {
+    ...actual,
+    validateDirectory: vi.fn(async (dir: string) => dir),
+    readCachedContext: vi.fn(async () => null),
+    isCacheFresh: vi.fn(async () => false),
+  };
+});
 
 vi.mock('../../../cli/commands/analyze.js', () => ({
   runAnalysis: vi.fn(),

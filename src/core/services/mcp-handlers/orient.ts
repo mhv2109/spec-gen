@@ -150,7 +150,7 @@ export async function handleOrient(
   const relevantFunctions: OrientFunction[] = topResults.map(r => ({
     name: r.record.name,
     filePath: r.record.filePath,
-    score: parseFloat((1 - r.score).toFixed(3)),
+    score: parseFloat(r.score.toFixed(3)),
     signature: r.record.signature || undefined,
     docstring: r.record.docstring || undefined,
     language: r.record.language,
@@ -211,10 +211,14 @@ export async function handleOrient(
   }));
 
   // ── Insertion points (lightweight: reuse rawResults with structural scoring) ──
+  // Normalise search scores to [0, 1] for compositeScore (scores are RRF/BM25: higher = better)
+  const maxRawScore = rawResults.length > 0 ? Math.max(...rawResults.map(r => r.score)) : 1;
+  const normalise = (s: number) => maxRawScore > 0 ? s / maxRawScore : 0;
+
   const insertionCandidates = rawResults.map(r => {
     const role     = classifyRole(r.record.fanIn, r.record.fanOut, r.record.isHub, r.record.isEntryPoint);
     const strategy = deriveStrategy(role);
-    const score    = compositeScore(r.score, role);
+    const score    = compositeScore(normalise(r.score), role);
     return {
       name: r.record.name,
       filePath: r.record.filePath,
@@ -236,7 +240,7 @@ export async function handleOrient(
         domain: r.record.domain,
         section: r.record.section,
         title: r.record.title,
-        score: parseFloat((1 - r.score).toFixed(3)),
+        score: parseFloat(r.score.toFixed(3)),
         text: r.record.text.slice(0, 300) + (r.record.text.length > 300 ? '…' : ''),
       }));
     } catch {

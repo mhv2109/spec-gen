@@ -84,20 +84,29 @@ describe('buildReason', () => {
 });
 
 describe('compositeScore', () => {
-  it('returns a number between 0 and 1 for typical inputs', () => {
-    const s = compositeScore(0.3, 'hub');
+  it('returns a number between 0 and 1 for typical relevance inputs', () => {
+    const s = compositeScore(0.7, 'hub');
     expect(s).toBeGreaterThan(0);
     expect(s).toBeLessThanOrEqual(1);
   });
-  it('gives higher score to entry_point than internal at same distance', () => {
-    const ep = compositeScore(0.3, 'entry_point');
-    const internal = compositeScore(0.3, 'internal');
+  it('gives higher score to entry_point than internal at same relevance', () => {
+    const ep = compositeScore(0.7, 'entry_point');
+    const internal = compositeScore(0.7, 'internal');
     expect(ep).toBeGreaterThan(internal);
   });
-  it('clamps semantic component to 0 when distance > 1', () => {
-    // distance > 1 → semantic = max(0, 1-distance) = 0, score is purely structural
-    const s = compositeScore(1.5, 'utility');
-    expect(s).toBeGreaterThanOrEqual(0);
+  it('clamps semantic component to [0, 1] range', () => {
+    // relevance > 1 → clamped to 1
+    const high = compositeScore(1.5, 'utility');
+    const one = compositeScore(1.0, 'utility');
+    expect(high).toBe(one);
+    // relevance 0 → semantic component is 0, score is purely structural
+    const zero = compositeScore(0, 'utility');
+    expect(zero).toBeGreaterThanOrEqual(0);
+  });
+  it('higher relevance produces higher composite score for same role', () => {
+    const high = compositeScore(0.9, 'orchestrator');
+    const low = compositeScore(0.1, 'orchestrator');
+    expect(high).toBeGreaterThan(low);
   });
 });
 

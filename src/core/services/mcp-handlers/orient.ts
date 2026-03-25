@@ -332,10 +332,17 @@ export async function handleOrient(
             const absSpecPath = join(absDir, entry.specPath);
             const content = await loadCondensedCached(manifestCache, absSpecPath, entry.specPath);
             if (!content) return null;
+            const MAX_SOURCE_FILES = 8;
+            const relFiles = entry.sourceFiles.map(f =>
+              f.startsWith(absDir) ? f.slice(absDir.length).replace(/^\//, '') : f,
+            );
+            const sourceFiles = relFiles.length > MAX_SOURCE_FILES
+              ? [...relFiles.slice(0, MAX_SOURCE_FILES), `… and ${relFiles.length - MAX_SOURCE_FILES} more`]
+              : relFiles;
             return {
               domain: sd.domain,
               specPath: entry.specPath,
-              sourceFiles: entry.sourceFiles,
+              sourceFiles,
               dependsOn: entry.dependsOn,
               calledBy: entry.calledBy,
               content,

@@ -172,9 +172,6 @@ export class OpenSpecFormatGenerator {
         domainMap.set(domainName.toLowerCase(), domain);
       }
       domain.services.push(service);
-      if (service.sourceFile && !domain.files.includes(service.sourceFile)) {
-        domain.files.push(service.sourceFile);
-      }
     }
 
     // Add endpoints to domains
@@ -844,18 +841,24 @@ export class OpenSpecFormatGenerator {
    * Build `## Dependencies` section for a domain spec using depGraph edges.
    * Returns an empty array if no depGraph or no cross-domain edges found.
    */
-  private buildDependencySection(domainName: string, domainFiles: string[]): string[] {
+  private buildDependencySection(domainName: string, _domainFiles: string[]): string[] {
     const depGraph = this.options.depGraph;
-    if (!depGraph || domainFiles.length === 0) return [];
+    if (!depGraph) return [];
 
-    const domainFileSet = new Set(domainFiles);
+    // Resolve the cluster for this domain from depGraph
+    const cluster = depGraph.clusters.find(
+      c => c.suggestedDomain.toLowerCase() === domainName.toLowerCase(),
+    );
+    if (!cluster || cluster.files.length === 0) return [];
+
+    const domainFileSet = new Set(cluster.files);
 
     // Build file → cluster mapping
     const clusterByFile = new Map<string, { id: string; suggestedDomain: string }>();
-    for (const cluster of depGraph.clusters) {
-      for (const f of cluster.files) {
+    for (const c of depGraph.clusters) {
+      for (const f of c.files) {
         if (!clusterByFile.has(f)) {
-          clusterByFile.set(f, { id: cluster.id, suggestedDomain: cluster.suggestedDomain });
+          clusterByFile.set(f, { id: c.id, suggestedDomain: c.suggestedDomain });
         }
       }
     }

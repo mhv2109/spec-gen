@@ -26,10 +26,11 @@ function makeDepGraph(overrides: Partial<DependencyGraphResult> = {}): Dependenc
     edges: [],
     clusters: [],
     structuralClusters: [],
-    rankings: { mostImported: [], mostConnected: [], leastConnected: [], clusterCenters: [] },
+    cycles: [],
+    rankings: { byImportance: [], byConnectivity: [], clusterCenters: [], leafNodes: [], bridgeNodes: [], orphanNodes: [] },
     statistics: {
       nodeCount: 0, edgeCount: 0, httpEdgeCount: 0, importEdgeCount: 0,
-      avgDegree: 0, density: 0, clusterCount: 0, structuralClusterCount: 0,
+      avgDegree: 0, density: 0, clusterCount: 0, structuralClusterCount: 0, cycleCount: 0,
     },
     ...overrides,
   };
@@ -94,7 +95,7 @@ describe('RagManifestGenerator', () => {
           id: 'c1', name: 'analyzer', files: ['src/core/analyzer/call-graph.ts'],
           internalEdges: 1, cohesion: 0.5, isStructural: true,
           suggestedDomain: 'analyzer', color: '#000',
-          externalEdges: 0, totalEdges: 1, nodes: [],
+          externalEdges: 0, coupling: 0,
         },
       ],
     });
@@ -110,22 +111,22 @@ describe('RagManifestGenerator', () => {
           id: 'c1', name: 'generator', files: ['src/generator/gen.ts'],
           internalEdges: 1, cohesion: 0.5, isStructural: true,
           suggestedDomain: 'generator', color: '#0f0',
-          externalEdges: 1, totalEdges: 2, nodes: [],
+          externalEdges: 1, coupling: 0.5,
         },
         {
           id: 'c2', name: 'analyzer', files: ['src/analyzer/dep.ts'],
           internalEdges: 1, cohesion: 0.5, isStructural: true,
           suggestedDomain: 'analyzer', color: '#f00',
-          externalEdges: 1, totalEdges: 2, nodes: [],
+          externalEdges: 1, coupling: 0.5,
         },
       ],
       edges: [
         {
           source: 'src/generator/gen.ts',
           target: 'src/analyzer/dep.ts',
-          type: 'import',
           importedNames: ['DependencyGraphResult'],
-          isRelative: false,
+          isTypeOnly: false,
+          weight: 1,
         },
       ],
     });
@@ -148,16 +149,16 @@ describe('RagManifestGenerator', () => {
           id: 'c1', name: 'analyzer', files: ['src/analyzer/a.ts', 'src/analyzer/b.ts'],
           internalEdges: 1, cohesion: 1, isStructural: true,
           suggestedDomain: 'analyzer', color: '#000',
-          externalEdges: 0, totalEdges: 1, nodes: [],
+          externalEdges: 0, coupling: 0,
         },
       ],
       edges: [
         {
           source: 'src/analyzer/a.ts',
           target: 'src/analyzer/b.ts',
-          type: 'import',
           importedNames: [],
-          isRelative: true,
+          isTypeOnly: false,
+          weight: 1,
         },
       ],
     });

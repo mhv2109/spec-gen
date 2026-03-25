@@ -772,11 +772,11 @@ describe('Edge Cases', () => {
 
 function makeMinimalDepGraph(overrides: Partial<DependencyGraphResult> = {}): DependencyGraphResult {
   return {
-    nodes: [], edges: [], clusters: [], structuralClusters: [],
-    rankings: { mostImported: [], mostConnected: [], leastConnected: [], clusterCenters: [] },
+    nodes: [], edges: [], clusters: [], structuralClusters: [], cycles: [],
+    rankings: { byImportance: [], byConnectivity: [], clusterCenters: [], leafNodes: [], bridgeNodes: [], orphanNodes: [] },
     statistics: {
       nodeCount: 0, edgeCount: 0, httpEdgeCount: 0, importEdgeCount: 0,
-      avgDegree: 0, density: 0, clusterCount: 0, structuralClusterCount: 0,
+      avgDegree: 0, density: 0, clusterCount: 0, structuralClusterCount: 0, cycleCount: 0,
     },
     ...overrides,
   };
@@ -790,17 +790,17 @@ describe('OpenSpecFormatGenerator — ## Dependencies section', () => {
           id: 'c-gen', name: 'generator', files: ['src/gen.ts'],
           internalEdges: 1, cohesion: 0.5, isStructural: true,
           suggestedDomain: 'generator', color: '#0f0',
-          externalEdges: 1, totalEdges: 2, nodes: [],
+          externalEdges: 1, coupling: 0.5,
         },
         {
           id: 'c-ana', name: 'analyzer', files: ['src/ana.ts'],
           internalEdges: 1, cohesion: 0.5, isStructural: true,
           suggestedDomain: 'analyzer', color: '#f00',
-          externalEdges: 1, totalEdges: 2, nodes: [],
+          externalEdges: 1, coupling: 0.5,
         },
       ],
       edges: [
-        { source: 'src/ana.ts', target: 'src/gen.ts', type: 'import', importedNames: ['GenHelper'], isRelative: false },
+        { source: 'src/ana.ts', target: 'src/gen.ts', importedNames: ['GenHelper'], isTypeOnly: false, weight: 1 },
       ],
     });
 
@@ -809,13 +809,15 @@ describe('OpenSpecFormatGenerator — ## Dependencies section', () => {
     result.survey.suggestedDomains = ['generator', 'analyzer'];
     result.services = [
       {
-        name: 'GeneratorService', domain: 'generator', description: 'gen', sourceFile: 'src/gen.ts',
-        operations: [{ name: 'doGen', description: 'generate' }],
-      } as ExtractedService,
+        name: 'GeneratorService', domain: 'generator', purpose: 'gen',
+        operations: [{ name: 'doGen', description: 'generate', scenarios: [] }],
+        dependencies: [], sideEffects: [],
+      } as unknown as ExtractedService,
       {
-        name: 'AnalyzerService', domain: 'analyzer', description: 'ana', sourceFile: 'src/ana.ts',
-        operations: [{ name: 'doAna', description: 'analyze' }],
-      } as ExtractedService,
+        name: 'AnalyzerService', domain: 'analyzer', purpose: 'ana',
+        operations: [{ name: 'doAna', description: 'analyze', scenarios: [] }],
+        dependencies: [], sideEffects: [],
+      } as unknown as ExtractedService,
     ];
     result.entities = [];
     result.endpoints = [];
@@ -842,7 +844,7 @@ describe('OpenSpecFormatGenerator — ## Dependencies section', () => {
           id: 'c1', name: 'user', files: ['src/user.ts'],
           internalEdges: 1, cohesion: 1, isStructural: true,
           suggestedDomain: 'user', color: '#000',
-          externalEdges: 0, totalEdges: 1, nodes: [],
+          externalEdges: 0, coupling: 0,
         },
       ],
       edges: [],

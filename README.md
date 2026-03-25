@@ -89,7 +89,7 @@ npm run dev
 
 Scans your codebase using pure static analysis:
 - Walks the directory tree, respects .gitignore, scores files by significance
-- Parses imports and exports to build a dependency graph (TypeScript, JavaScript, Python, Go, Rust, Ruby, Java, C++)
+- Parses imports and exports to build a dependency graph (TypeScript, JavaScript, Python, Go, Rust, Ruby, Java, C++, Swift)
 - Detects HTTP cross-language edges: matches `fetch`/`axios`/`ky`/`got` calls in JS/TS files to FastAPI/Flask/Django route definitions in Python files, creating cross-language dependency edges with `exact`, `path`, or `fuzzy` confidence
 - Resolves Python absolute imports (`from services.retriever import X`) to local files
 - Clusters related files into structural business domains automatically
@@ -735,7 +735,7 @@ All tools run on **pure static analysis** -- no LLM quota consumed.
 | Tool | Description | Requires prior analysis |
 |------|-------------|:---:|
 | `analyze_codebase` | Run full static analysis: repo structure, dependency graph, call graph (hub functions, entry points, layer violations), and top refactoring priorities. Results cached for 1 hour (`force: true` to bypass). | No |
-| `get_call_graph` | Hub functions (high fan-in), entry points (no internal callers), and architectural layer violations. Supports TypeScript, JavaScript, Python, Go, Rust, Ruby, Java, C++. | Yes |
+| `get_call_graph` | Hub functions (high fan-in), entry points (no internal callers), and architectural layer violations. Supports TypeScript, JavaScript, Python, Go, Rust, Ruby, Java, C++, Swift. | Yes |
 | `get_signatures` | Compact function/class signatures per file. Filter by path substring with `filePattern`. Useful for understanding a module's public API without reading full source. | Yes |
 | `get_duplicate_report` | Detect duplicate code: Type 1 (exact clones), Type 2 (structural -- renamed variables), Type 3 (near-clones with Jaccard similarity >= 0.7). Groups sorted by impact. | Yes |
 
@@ -1012,8 +1012,9 @@ spec-gen view --spec <path>        # custom spec dir (default: ./openspec/specs/
 
 | View | Description |
 |------|-------------|
-| **Clusters** | Colour-coded architectural clusters with expandable member nodes |
-| **Flat** | Force-directed dependency graph (all nodes) |
+| **Clusters** | Colour-coded architectural clusters with expandable member nodes. Falls back to directory clusters for languages without import edges (Swift, C++) |
+| **Flat** | Force-directed dependency graph (all nodes). Import edges are solid; call edges (Swift/C++ synthesised, or HTTP cross-language) are cyan dashed |
+| **Classes** | Class/struct inheritance and call graph. Nodes coloured by language or connected component; isolated nodes hidden. Component-aware force layout keeps related classes together |
 | **Architecture** | High-level cluster map: role-coloured boxes, inter-cluster dependency arrows |
 
 ### Diagram Chat
@@ -1101,11 +1102,11 @@ Static analysis output is stored in `.spec-gen/analysis/`:
 | File | Description |
 |------|-------------|
 | `repo-structure.json` | Project structure and metadata |
-| `dependency-graph.json` | Import/export relationships and HTTP cross-language edges (JS/TS → Python) |
+| `dependency-graph.json` | Import/export relationships, HTTP cross-language edges (JS/TS → Python), and synthesised call edges for Swift/C++ |
 | `llm-context.json` | Context prepared for LLM (signatures, call graph) |
 | `dependencies.mermaid` | Visual dependency graph |
 | `SUMMARY.md` | Human-readable analysis summary |
-| `call-graph.json` | Function-level call graph (7 languages) |
+| `call-graph.json` | Function-level call graph (8 languages: TS/JS, Python, Go, Rust, Ruby, Java, C++, Swift) |
 | `refactor-priorities.json` | Refactoring issues by file and function |
 | `mapping.json` | Requirement->function mapping (produced by `generate`) |
 | `vector-index/` | LanceDB semantic index (produced by `--embed`) |
@@ -1207,17 +1208,18 @@ The index is stored in `.spec-gen/analysis/vector-index/` and is automatically u
 
 ## Supported Languages
 
-| Language | Signatures | Call Graph |
-|----------|-----------|------------|
-| TypeScript / JavaScript | Full | Full |
-| Python | Full | Full |
-| Go | Full | Full |
-| Rust | Full | Full |
-| Ruby | Full | Full |
-| Java | Full | Full |
-| C++ | Full | Full |
+| Language | Signatures | Call Graph | Notes |
+|----------|-----------|------------|-------|
+| TypeScript / JavaScript | Full | Full | Best results — rich type info |
+| Python | Full | Full | `self`/`cls` intra-class + import resolution |
+| Go | Full | Full | |
+| Rust | Full | Full | |
+| Ruby | Full | Full | |
+| Java | Full | Full | |
+| C++ | Full | Full | No intra-module imports — cross-file edges synthesised from call graph |
+| Swift | Full | Full | No intra-module imports — cross-file edges synthesised from call graph |
 
-TypeScript projects get the best results due to richer type information.
+**Note for Swift and C++ projects**: These languages do not use explicit import statements between files in the same module. spec-gen automatically synthesises file-level dependency edges from resolved cross-file call edges, so the flat graph, cluster graph, and architectural views remain meaningful. Capitalised receiver names (`Logger.record()`, `NotificationManager.show()`) are resolved via type-name lookup — no type annotations required.
 
 ## Usage Options
 
@@ -1332,7 +1334,7 @@ for (const [key, req] of Object.entries(requirements)) {
 npm install          # Install dependencies
 npm run dev          # Development mode (watch)
 npm run build        # Build
-npm run test:run     # Run tests (2000+ unit tests)
+npm run test:run     # Run tests (2059 unit tests)
 npm run typecheck    # Type check
 ```
 

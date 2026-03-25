@@ -1,7 +1,7 @@
 schema: spec-driven
 spec-gen:
   version: 1.0.0
-  generatedAt: 2026-03-25T20:54:06.255Z
+  generatedAt: 2026-03-25T21:10:00.748Z
   domains:
     - analyzer
     - api
@@ -10,16 +10,15 @@ spec-gen:
     - drift
     - verifier
     - types
-    - cli
-    - viewer
     - spec
     - openspec
     - import
     - chat
     - mcp-handlers
-    - utilities
   confidence: 0.9
 context: >-
+  # User-provided context (preserved)
+
   # User-provided context (preserved)
 
   # Auto-detected by spec-gen
@@ -30,6 +29,18 @@ context: >-
 
   Domains: analyzer, api, services, generator, drift, verifier, types, cli, viewer, spec, openspec,
   chat, stages, mcp-handlers, utilities, commands, components, app
+
+  Key patterns: Component-based UI
+
+
+  # Auto-detected by spec-gen
+
+  Tech stack: TypeScript, React, Vitest
+
+  Architecture: Layered (routes → controllers → services → repositories)
+
+  Domains: analyzer, api, services, generator, drift, verifier, types, cli, viewer, spec, openspec,
+  import, chat, stages, mcp-handlers, eslint-config, utilities, commands, components, app
 
   Key patterns: Component-based UI
 

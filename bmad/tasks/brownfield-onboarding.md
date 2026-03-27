@@ -1,9 +1,12 @@
 # Task: Brownfield Onboarding
 
-**Purpose**: Establish a structural baseline on an existing codebase before any BMAD story work begins.
-Run this task once per project, or after a large batch of untracked changes.
+**Purpose**: Establish a structural baseline on an existing codebase.
+**Phase**: Architecture — run this BEFORE writing architecture documents, planning epics, or creating stories.
+Run once per project, then re-run at the start of each planning cycle (quarterly or after major refactors).
 
-**Output**: populated `openspec/` + `.spec-gen/` + architecture summary in the story/doc of your choice.
+**Who runs this**: Architect Agent (not Dev Agent).
+
+**Output**: populated `openspec/` + `.spec-gen/` + risk register embedded in architecture doc.
 
 **Estimated time**: 5–15 minutes depending on codebase size.
 

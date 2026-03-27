@@ -7,29 +7,80 @@ to enable safe, spec-driven development on brownfield codebases.
 
 BMAD is designed for structured, spec-first development. On brownfield codebases
 (existing code without explicit architecture documentation), agents lack the structural
-context needed to implement stories safely. spec-gen provides that context via MCP.
+context needed to plan and implement safely.
 
-## Architecture
+The key principle: **structural reality must be known at architecture time, not at
+implementation time.** spec-gen provides that context via MCP at every phase of the
+BMAD workflow.
+
+## Full Workflow
 
 ```
-BMAD Story
-    │
-    ▼
-BMAD Dev Agent
-+ dev-brownfield extension   ← loads bmad/agents/dev-brownfield.md
+── ARCHITECTURE PHASE ──────────────────────────────────────────────────────────
+
+  Brownfield Onboarding          ← bmad/tasks/brownfield-onboarding.md (run once)
+       │  spec-gen analyze + generate
+       ▼
+  Architect Agent                ← bmad/agents/architect-brownfield.md
+       │  get_architecture_overview
+       │  get_refactor_report          → no-touch zones
+       │  get_critical_hubs            → hub risk landscape
+       │  generate_change_proposal     → per epic
+       ▼
+  architecture.md                ← structural reality + target + gap = debt backlog
+       │
+       ▼
+  Technical Debt Stories         ← refactor stories created BEFORE feature stories
+
+── PLANNING PHASE ──────────────────────────────────────────────────────────────
+
+  PM Agent                       ← uses story-brownfield template
+       │  risk_context pre-filled from architect output
+       ▼
+  Sprint Candidate               ← stories with risk_context embedded
+       │
+       ▼
+  Sprint Planning                ← bmad/tasks/sprint-planning-brownfield.md
+       │  generate_change_proposal    → per story
+       │  get_critical_hubs           → conflict detection
+       │  check_spec_drift            → coverage gaps
+       ▼
+  Sprint Plan                    ← risk matrix + story order + blocked list
+
+── IMPLEMENTATION PHASE ────────────────────────────────────────────────────────
+
+  Dev Agent                      ← bmad/agents/dev-brownfield.md
+       │  reads risk_context from story (already known)
+       │  orient + analyze_impact    → confirm + verify, not discover
+       ▼
+  Implementation + check_spec_drift
+       │
+       ▼
+  spec-gen generate               ← update specs post-sprint
+```
+
+## Architecture (MCP layer)
+
+```
+BMAD Agents (Architect / PM / SM / Dev)
     │
     │  MCP calls
     ▼
 spec-gen MCP Server
     │
-    ├── orient           → maps story to functions + insertion points
-    ├── analyze_impact   → risk score + blast radius per function
-    ├── search_specs     → finds relevant OpenSpec requirements
-    ├── check_spec_drift → verifies code/spec alignment post-implementation
-    └── ...25 other tools
+    ├── analyze_codebase          → build/refresh call graph
+    ├── get_architecture_overview → domain clusters, hubs, entry points
+    ├── get_refactor_report       → no-touch zones, priority scores
+    ├── get_critical_hubs         → fan-in bottlenecks
+    ├── generate_change_proposal  → per epic/story → proposal.md
+    ├── orient                    → story → functions + insertion points
+    ├── analyze_impact            → blast radius + risk score
+    ├── search_specs / get_spec   → existing requirements
+    ├── check_spec_drift          → post-implementation verification
+    └── ... 17 other tools
     │
     ▼
-Codebase (brownfield)
+Codebase (brownfield) + openspec/ (specs)
 ```
 
 ## Setup
@@ -57,52 +108,66 @@ In your Claude Code / Cline / Cursor MCP configuration:
 }
 ```
 
-### 3. Run the brownfield onboarding task
-
-Before starting any BMAD stories on an existing codebase, run the onboarding task once:
-
-```
-/bmad task brownfield-onboarding
-```
-
-Or manually: open `bmad/tasks/brownfield-onboarding.md` and follow the steps.
-
-This will:
-- Build the call graph and dependency graph
-- Generate OpenSpec specifications from the codebase
-- Create a risk register of high-complexity functions
-- Establish a drift-detection baseline
-
-### 4. Copy BMAD integration files into your project
-
-Copy the `bmad/` directory from this repo into your project:
+### 3. Copy BMAD integration files into your project
 
 ```bash
 cp -r /path/to/spec-gen/bmad/ ./bmad/
 ```
 
-Or reference them as templates in your BMAD configuration.
+### 4. Architecture phase setup (run once, before first sprint)
 
-### 5. Load the brownfield extension in your dev agent
+**Step 4a — Brownfield onboarding** (prerequisite for architecture, not for dev):
 
-Add to your BMAD dev agent persona (or include in your project's CLAUDE.md):
+Open `bmad/tasks/brownfield-onboarding.md` with your Architect Agent and follow the steps.
+This builds the structural baseline the architect needs to write a grounded architecture doc.
+
+**Step 4b — Architect brownfield analysis**:
+
+Load `bmad/agents/architect-brownfield.md` into your Architect Agent.
+It will run structural analysis, identify no-touch zones, assess epics, and produce:
+- `docs/architecture.md` with a "Structural Reality" section
+- Technical debt stories for the backlog
+- `risk_context` annotations on feature stories
+
+### 5. Sprint planning
+
+Before each sprint, load `bmad/tasks/sprint-planning-brownfield.md` with your SM/Architect Agent.
+It validates the sprint candidate, detects conflicts, and recommends story ordering.
+
+### 6. Load agent extensions
+
+In your project's `CLAUDE.md` (or BMAD agent configuration):
 
 ```markdown
-@bmad/agents/dev-brownfield.md
+@bmad/agents/architect-brownfield.md   ← for Architect Agent sessions
+@bmad/agents/dev-brownfield.md         ← for Dev Agent sessions
 ```
-
-Or prepend the contents of `bmad/agents/dev-brownfield.md` to your BMAD dev agent's system prompt.
 
 ---
 
 ## File Reference
 
+### Agent Extensions
+
+| File | Phase | Purpose |
+|---|---|---|
+| `bmad/agents/architect-brownfield.md` | Architecture | Structural reality check before design; epic risk assessment |
+| `bmad/agents/dev-brownfield.md` | Implementation | Pre-implementation gate; scope enforcement |
+
+### Tasks
+
+| File | Phase | Who | Purpose |
+|---|---|---|---|
+| `bmad/tasks/brownfield-onboarding.md` | **Architecture** | Architect | One-time structural baseline — run before first sprint |
+| `bmad/tasks/sprint-planning-brownfield.md` | **Planning** | SM / Architect | Per-sprint risk matrix, conflict detection, story ordering |
+| `bmad/tasks/implement-story-brownfield.md` | Implementation | Dev | Story implementation with pre-filled risk context |
+| `bmad/tasks/brownfield-refactor.md` | Implementation | Dev | Safe refactor when risk ≥ 70 blocks a story |
+
+### Templates
+
 | File | Purpose |
 |---|---|
-| `bmad/agents/dev-brownfield.md` | Developer agent extension — adds pre-implementation gate |
-| `bmad/tasks/brownfield-onboarding.md` | First-time project setup (run once) |
-| `bmad/tasks/implement-story-brownfield.md` | Story implementation on brownfield |
-| `bmad/tasks/brownfield-refactor.md` | Safe refactor before touching high-risk functions |
+| `bmad/templates/story-brownfield.md` | Story template with `risk_context` section (pre-filled by Architect) |
 
 ---
 

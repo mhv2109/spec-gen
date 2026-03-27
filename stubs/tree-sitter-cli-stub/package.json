@@ -1,0 +1,6 @@
+{
+  "name": "tree-sitter-cli",
+  "version": "0.23.2",
+  "description": "Stub — no binary download. tree-sitter-swift ships prebuilds; this stub prevents the GitHub download in restricted networks.",
+  "license": "MIT"
+}

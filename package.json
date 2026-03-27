@@ -116,5 +116,8 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.19.1",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "tree-sitter-cli": "file:./stubs/tree-sitter-cli-stub"
   }
 }

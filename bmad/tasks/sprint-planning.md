@@ -1,4 +1,4 @@
-# Task: Sprint Planning — Brownfield
+# Task: Sprint Planning
 
 **Purpose**: Validate a sprint candidate before committing to it.
 Detects conflicts, blocked stories, and ordering constraints using structural analysis.
@@ -12,9 +12,9 @@ Detects conflicts, blocked stories, and ordering constraints using structural an
 
 ## Prerequisites
 
-- Brownfield onboarding completed (`bmad/tasks/onboarding.md`)
-- All sprint candidate stories have a `risk_context` section (see `bmad/templates/story.md`)
-- If `risk_context` is missing on any story, run the Architect brownfield agent on it first
+- Onboarding completed (`bmad/tasks/onboarding.md`)
+- All sprint candidate stories have a `risk_context` section
+- If `risk_context` is missing on any story, run `annotate_story` on it first (not manually)
 
 ---
 
@@ -32,27 +32,32 @@ If the last `analyze_codebase` run was more than 24 hours ago, or if code change
 
 ---
 
-## Step 2 — Assess each story
+## Step 2 — Collect risk data per story
 
-For each story in the sprint candidate list, call `generate_change_proposal`.
-Use the story title + primary AC as the description.
+For each story in the sprint candidate list:
+
+**If `risk_context` is already populated** (normal case — architect did their job):
+Read it directly from the story file. No MCP call needed.
+
+**If `risk_context` is absent**, run `annotate_story` now:
 
 ```xml
 <use_mcp_tool>
   <server_name>spec-gen</server_name>
-  <tool_name>generate_change_proposal</tool_name>
+  <tool_name>annotate_story</tool_name>
   <arguments>{
     "directory": "$PROJECT_ROOT",
-    "description": "$STORY_TITLE — $PRIMARY_AC",
-    "slug": "$STORY_ID"
+    "storyFilePath": "$STORY_FILE_PATH",
+    "description": "$STORY_TITLE — $PRIMARY_AC"
   }</arguments>
 </use_mcp_tool>
 ```
 
-Collect for each story:
-- `domainsAffected`
-- `maxRiskScore` + `riskLevel`
-- `functionsFound` (list of top functions)
+Collect from each story's `risk_context`:
+- `Domains` → which spec domains are touched
+- `Max risk score` + level
+- `Blocking refactors` → any listed
+- `Functions in scope` → for conflict detection
 
 ---
 
@@ -65,35 +70,35 @@ Collect for each story:
 | S-03 Rate limiting | api | 🟡 45 | none | ⚠️ caution |
 
 **Status rules:**
-- ⛔ **blocked**: maxRiskScore ≥ 70 and no refactor story scheduled before it
-- ⚠️ **caution**: maxRiskScore 40–69, or story touches a critical hub
-- ✅ **ready**: maxRiskScore < 40 and no hub involvement
+- ⛔ **blocked**: max risk ≥ 70 and no refactor story scheduled before it
+- ⚠️ **caution**: max risk 40–69, or story touches a critical hub
+- ✅ **ready**: max risk < 40 and no hub involvement
 
 ---
 
-## Step 4 — Detect domain conflicts
+## Step 4 — Detect function conflicts
 
-Find stories that touch the same domains or functions:
+Find stories whose `functions in scope` overlap.
+
+Get the full hub list to cross-reference:
 
 ```xml
 <use_mcp_tool>
   <server_name>spec-gen</server_name>
   <tool_name>get_critical_hubs</tool_name>
-  <arguments>{"directory": "$PROJECT_ROOT", "limit": 10}</arguments>
+  <arguments>{"directory": "$PROJECT_ROOT", "limit": 15}</arguments>
 </use_mcp_tool>
 ```
 
-For any hub function that appears in multiple stories' scope:
+For each hub that appears in two or more stories' function scope:
 
-> "⚠️ Stories S-01 and S-04 both affect `processPayment` (fan-in: 12).
-> Parallel implementation risk: merge conflicts and silent regressions.
-> Recommend: sequence them — S-04 after S-01, or assign to the same developer."
+> "⚠️ Stories S-01 and S-04 both touch `processPayment` (fan-in: 12).
+> Parallel risk: merge conflicts and silent regressions.
+> Recommend: sequence them, or assign to the same developer."
 
 ---
 
-## Step 5 — Check spec coverage
-
-Identify stories that will introduce code with no spec coverage:
+## Step 5 — Check spec coverage gaps
 
 ```xml
 <use_mcp_tool>
@@ -104,35 +109,18 @@ Identify stories that will introduce code with no spec coverage:
 ```
 
 For any `uncovered` files already present:
-> "These files have no spec coverage. Stories touching them cannot use `check_spec_drift`
-> as a completion gate. Recommend: add a spec generation task to the sprint."
+> "Stories touching these files cannot use `check_spec_drift` as a completion gate.
+> Add a `spec-gen generate` task to the sprint."
 
 ---
 
 ## Step 6 — Determine story ordering
 
-Based on the risk matrix and conflict analysis, produce a recommended execution order:
-
 **Rules:**
 1. Refactor stories before the stories they unblock
 2. Stories touching the same hub: sequence, do not parallelise
 3. Low-risk stories can be parallelised freely
-4. Spec generation (`spec-gen generate`) after any story that adds new files
-
-**Example output:**
-
-```
-Sprint Execution Order:
-
-Week 1:
-  [DAY 1-2]  S-05: Refactor processPayment (unblocks S-01)
-  [DAY 1-3]  S-02: Email validation (independent, low risk)
-
-Week 2:
-  [DAY 1-2]  S-01: Add payment retry (now unblocked)
-  [DAY 3]    S-03: Rate limiting (caution — same dev as S-01 preferred)
-  [DAY 4]    Run spec-gen generate (update specs after S-01, S-02, S-03)
-```
+4. `spec-gen generate` after any story that adds new source files
 
 ---
 
@@ -140,18 +128,18 @@ Week 2:
 
 | Criterion | Status |
 |---|---|
-| No blocked stories without prior refactor | ✅ / ⛔ |
-| No parallel stories on same hub | ✅ / ⚠️ |
+| No ⛔ stories without prior refactor scheduled | ✅ / ⛔ |
+| No parallel stories on the same hub | ✅ / ⚠️ |
 | All stories have `risk_context` | ✅ / ⛔ |
 | Spec coverage adequate for drift detection | ✅ / ⚠️ |
 
-If any ⛔ remain: **do not lock the sprint**. Resolve blockers first.
+**If any ⛔ remain: do not lock the sprint.** Resolve blockers first.
 
 ---
 
 ## Output
 
-Write the sprint plan to `openspec/changes/sprint-{N}/proposal.md` (or your BMAD sprint doc):
+Write the sprint plan to `.spec-gen/sprints/sprint-{N}.md`:
 
 ```markdown
 # Sprint {N} — Risk Report
@@ -165,7 +153,7 @@ Generated: {date}
 {list from Step 4}
 
 ## Recommended Order
-{order from Step 6}
+{from Step 6}
 
 ## Readiness
 {verdict from Step 7}

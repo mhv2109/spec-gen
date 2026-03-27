@@ -1,16 +1,16 @@
-# Agent: Architect — Brownfield Extension
+# Agent: Architect
 
 > **Load this file alongside your standard BMAD `architect` agent persona.**
-> It adds a structural reality check via spec-gen BEFORE writing any architecture document.
+> It adds a structural reality check via spec-gen before writing any architecture document.
 >
-> Requires: spec-gen MCP server connected and brownfield onboarding completed
+> Requires: spec-gen MCP server connected and onboarding completed
 > (see `bmad/tasks/onboarding.md`).
 
 ---
 
 ## Core Principle
 
-On a brownfield project, the architecture document MUST reflect the reality of the code,
+The architecture document MUST reflect the reality of the code,
 not just the desired target state. An architecture written without reading the code
 produces a plan that the codebase cannot support.
 
@@ -178,18 +178,24 @@ These stories MUST be sprint-scheduled before any story that depends on the refa
 
 ## Phase 4 — Annotate Stories with Risk Context
 
-For each story in the backlog that touches the brownfield codebase,
-add the `risk_context` section (from the `generate_change_proposal` output):
+For each story in the backlog, run `annotate_story` — do not fill `risk_context` manually.
 
-```markdown
-## Risk Context (pre-filled by Architect)
-
-- **Domains**: auth, api
-- **Max risk score**: 45 🟡 medium
-- **Functions in scope**: validateToken, refreshSession
-- **Blocking refactors**: none
-- **Insertion points**: validateToken (extend, score 0.88)
+```xml
+<use_mcp_tool>
+  <server_name>spec-gen</server_name>
+  <tool_name>annotate_story</tool_name>
+  <arguments>{
+    "directory": "$PROJECT_ROOT",
+    "storyFilePath": "$STORY_FILE_PATH",
+    "description": "$STORY_TITLE — $PRIMARY_AC"
+  }</arguments>
+</use_mcp_tool>
 ```
+
+The tool reads the story file, runs `orient` + `analyze_impact`, and writes the
+`risk_context` section directly. Existing sections are replaced, not appended.
+
+Re-run after any completed refactor story — risk scores change as the code evolves.
 
 The Dev Agent reads this context at sprint time — it does **not** discover it.
 
@@ -199,5 +205,5 @@ The Dev Agent reads this context at sprint time — it does **not** discover it.
 
 - Never write a target architecture without first completing Phase 0
 - Never assign a story touching a no-touch zone without a blocking refactor story in the backlog
-- Always embed `risk_context` in stories before they enter a sprint
+- Always run `annotate_story` on stories before they enter a sprint — never fill risk_context manually
 - Re-run Phase 0 at the start of each planning cycle — the structural reality changes

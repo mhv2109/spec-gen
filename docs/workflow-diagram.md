@@ -16,7 +16,8 @@ flowchart TD
         get_architecture_overview
         get_refactor_report
         get_critical_hubs
-        generate_change_proposal × epic"]
+        generate_change_proposal × epic
+        annotate_story × story"]
 
         ARCH_ANALYSIS --> ARCH_DOC
 
@@ -33,8 +34,8 @@ flowchart TD
         type: technical-debt"]
 
         FEATURE_STORIES["**Feature Stories**
-        risk_context pre-filled
-        blocking deps set"]
+        annotate_story per story
+        risk_context written automatically"]
     end
 
     %% ── PLANNING PHASE ───────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ flowchart TD
         SPRINT_CANDIDATE --> SPRINT_PLANNING
 
         SPRINT_PLANNING["**Sprint Planning**
-        generate_change_proposal × story
+        read risk_context (or annotate_story if absent)
         get_critical_hubs → conflict detection
         check_spec_drift → coverage gaps"]
 

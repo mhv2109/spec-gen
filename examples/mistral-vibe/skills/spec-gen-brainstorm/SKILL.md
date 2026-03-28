@@ -208,3 +208,7 @@ Confirm to the user:
 - If `openspec/specs/` is absent — mention the limitation but do not block
 - Do not fill `## Risk Context` manually — always use `annotate_story`
 - Do not propose implementation steps — this skill ends at story creation
+- `generate_change_proposal` creates `openspec/changes/$FEATURE_SLUG/proposal.md` on disk.
+  Ideas that are abandoned leave orphan files. Inform the user at the end of the session:
+  "A proposal file was created at `openspec/changes/$FEATURE_SLUG/proposal.md`.
+  Delete it if this idea is not pursued."

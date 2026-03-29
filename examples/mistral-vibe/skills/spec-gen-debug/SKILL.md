@@ -245,13 +245,16 @@ or an undocumented state constraint — that is the invariant.
 **9c — Add the invariant**
 
 Append to the relevant domain spec under a `### Known Invariants` section
-(create it if absent):
+(create it if absent). Wrap the section in `<!-- manual -->` / `<!-- /manual -->`
+markers so `spec-gen generate` preserves it on re-generation:
 
 ```markdown
+<!-- manual -->
 ### Known Invariants
 
 - `$FUNCTION`: $INVARIANT_STATEMENT
   — discovered via bug fix on $DATE, root cause: $ROOT_CAUSE_SUMMARY
+<!-- /manual -->
 ```
 
 If the domain spec does not exist yet (`uncovered` from Step 8), note the
@@ -267,8 +270,8 @@ Ask: is this bug an instance of a general failure pattern, or specific to this d
 | Bug is reproducible in other domains with the same pattern | Yes |
 | Bug is specific to a data invariant in `$DOMAIN` | No — domain spec only |
 
-If cross-cutting, append to `.claude/antipatterns.md` (create from
-`examples/mistral-vibe/antipatterns-template.md` if absent):
+If cross-cutting, append to `.claude/antipatterns.md` (if absent, create it with the
+header from the [antipatterns template](../../antipatterns-template.md)):
 
 ```markdown
 ## AP-{NNN} — {pattern name}

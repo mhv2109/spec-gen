@@ -11,6 +11,9 @@ From the story file:
 - `$STORY_TITLE`, `$AC`, `$PROJECT_ROOT`
 - `$RISK_CONTEXT` — the `risk_context` section (pre-filled by Architect Agent at planning time)
 
+If `.claude/antipatterns.md` exists, read it and store as `$ANTIPATTERNS`.
+This list will be cross-checked at Step 4b.
+
 ---
 
 ## Step 1 — Read the risk context
@@ -142,7 +145,7 @@ Confirm the approach with the user before writing code.
 ### Step 4b — Adversarial self-check
 
 Before writing any code, state explicitly what could break with this approach.
-If `.claude/antipatterns.md` exists, read it and include any applicable patterns.
+If `$ANTIPATTERNS` was loaded (see Inputs), include any applicable patterns.
 
 > "Risk check on `$INSERTION_POINT`:
 > - `$CALLER_A` and `$CALLER_B` depend on this function — verify their assumptions hold after the change.

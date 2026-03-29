@@ -186,6 +186,8 @@ Use the template `bmad/templates/story.md` with:
 - Story type: `technical-debt`
 - Title: `Refactor {function}: {issue}`
 - Blocking: list stories that cannot proceed until this is done
+- **Won't Do**: at minimum one item — scope the refactor tightly (e.g. "Won't change the public API", "Won't refactor callers")
+- **Acceptance Criteria**: must be testable — state observable outcomes (e.g. "riskScore drops below 70", "no caller changes required")
 
 These stories MUST be sprint-scheduled before any story that depends on the refactored function.
 

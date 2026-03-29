@@ -59,6 +59,13 @@ Collect from each story's `risk_context`:
 - `Blocking refactors` → any listed
 - `Functions in scope` → for conflict detection
 
+**Also verify story quality:**
+- `## Won't Do` section must be present with at least 1 item
+- Every AC must be testable (specific observable outcome, not a vague quality)
+
+Flag non-compliant stories:
+> "⚠️ Story S-NN is missing `## Won't Do` / has vague ACs — return to author before sprint lock."
+
 ---
 
 ## Step 3 — Build the sprint risk matrix
@@ -131,6 +138,7 @@ For any `uncovered` files already present:
 | No ⛔ stories without prior refactor scheduled | ✅ / ⛔ |
 | No parallel stories on the same hub | ✅ / ⚠️ |
 | All stories have `risk_context` | ✅ / ⛔ |
+| All stories have `## Won't Do` and testable ACs | ✅ / ⚠️ |
 | Spec coverage adequate for drift detection | ✅ / ⚠️ |
 
 **If any ⛔ remain: do not lock the sprint.** Resolve blockers first.

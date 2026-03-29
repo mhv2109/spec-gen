@@ -56,6 +56,11 @@ Inform the user:
 - Brownfield: "I found existing code related to this feature. Using structural analysis to guide design."
 - Greenfield: "No structural index found. Using Domain Sketch — structural analysis will be available after `spec-gen analyze` is run on the first implementation."
 
+**Load project antipatterns (both modes):**
+
+If `.claude/antipatterns.md` exists, read it and store as `$ANTIPATTERNS`.
+These will be used as a failure mode source in Step 5. If absent, `$ANTIPATTERNS = none`.
+
 ---
 
 ## Steps 2–4 — Structural analysis (brownfield only)
@@ -138,6 +143,9 @@ Ask: "Are there additional constraints before we explore approaches?"
 Each option must respect hard constraints. Name them clearly
 (e.g. Option A — Extend existing, Option B — New service, Option C — Facade).
 
+If `$ANTIPATTERNS ≠ none`, cross-check each option against the list.
+Flag any option that would reproduce a known failure pattern with ⚠ and the relevant AP-NNN.
+
 | | Option A | Option B | Option C |
 |---|---|---|---|
 | Insertion point | | | |
@@ -163,7 +171,8 @@ produce a revised option table.
 
 Before writing the story, switch roles: challenge the chosen option as a skeptic.
 
-State exactly 2 failure modes grounded in the structural data:
+State exactly 2 failure modes grounded in the structural data and, if `$ANTIPATTERNS ≠ none`,
+any applicable antipatterns from `.claude/antipatterns.md`:
 
 > "Devil's advocate on Option B:
 > 1. `$CALLER_A` calls `$INSERTION_POINT` with `$EDGE_CASE` — this path is not covered
@@ -176,6 +185,8 @@ mitigations to the story constraints?"
 
 Only proceed to Step 6 once the user has acknowledged the failure modes.
 Mitigations go into `## Technical Constraints` in the story.
+
+Ask: "What is explicitly out of scope for this story?" List the answers as `$WONT_DO`.
 
 ---
 
@@ -229,6 +240,8 @@ and a recommendation:
 
 Ask the user to confirm or override each decision before proceeding to Step 6.
 
+Ask: "What is explicitly out of scope for this story?" List the answers as `$WONT_DO`.
+
 ---
 
 ## Step 6 — Write the story
@@ -249,8 +262,16 @@ $FEATURE_DESCRIPTION
 
 ## Acceptance Criteria
 
+Each AC must be verifiable by a test. State the observable outcome, not the intent.
+✗ "Should handle errors correctly" — ✓ "Returns HTTP 400 with `{error: 'X'}` when Y is absent"
+
 - [ ] $AC_1
 - [ ] $AC_2
+
+## Won't Do
+
+- $WONT_DO_1
+- $WONT_DO_2
 
 ## Risk Context
 
@@ -279,8 +300,16 @@ $FEATURE_DESCRIPTION
 
 ## Acceptance Criteria
 
+Each AC must be verifiable by a test. State the observable outcome, not the intent.
+✗ "Should handle errors correctly" — ✓ "Returns HTTP 400 with `{error: 'X'}` when Y is absent"
+
 - [ ] $AC_1
 - [ ] $AC_2
+
+## Won't Do
+
+- $WONT_DO_1
+- $WONT_DO_2
 
 ## Domain Sketch
 
@@ -337,6 +366,8 @@ Patches `## Risk Context` directly. Story is now ready for `spec-gen-implement-s
 - Brownfield: do not fill `## Risk Context` manually — always use `annotate_story`
 - Greenfield: do not call `annotate_story` — there is nothing to annotate yet
 - Do not propose implementation steps — this skill ends at story creation
+- Every AC must be verifiable by a test — reject vague ACs ("should work", "handles errors") and rewrite them before proceeding
+- `## Won't Do` is mandatory in the story — at minimum one item
 - Brownfield: `generate_change_proposal` creates `openspec/changes/$FEATURE_SLUG/proposal.md`
   on disk. Inform the user at session end:
   "A proposal file was created at `openspec/changes/$FEATURE_SLUG/proposal.md`.

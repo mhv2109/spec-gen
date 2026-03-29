@@ -257,10 +257,35 @@ Append to the relevant domain spec under a `### Known Invariants` section
 If the domain spec does not exist yet (`uncovered` from Step 8), note the
 invariant in the story/issue instead and flag it for the next `spec-gen generate` run.
 
-**9d — Inform the user**
+**9d — Evaluate cross-cutting scope**
 
-> "Invariant added to `openspec/specs/$DOMAIN/spec.md`. Future agents using
-> `search_specs` on this domain will see this constraint."
+Ask: is this bug an instance of a general failure pattern, or specific to this domain?
+
+| Signal | Cross-cutting antipattern? |
+|---|---|
+| Bug involves an assumption about external state, ordering, or caller contract | Yes |
+| Bug is reproducible in other domains with the same pattern | Yes |
+| Bug is specific to a data invariant in `$DOMAIN` | No — domain spec only |
+
+If cross-cutting, append to `.claude/antipatterns.md` (create from
+`examples/mistral-vibe/antipatterns-template.md` if absent):
+
+```markdown
+## AP-{NNN} — {pattern name}
+
+- **Class**: {state | concurrency | boundary | assumption | resource | ordering}
+- **Symptom**: {what broke — one sentence}
+- **Rule**: {detection rule — "When X, always verify Y"}
+- **Discovered**: $DATE via $BUG_DESCRIPTION
+```
+
+**9e — Inform the user**
+
+> "Invariant added to `openspec/specs/$DOMAIN/spec.md`."
+
+If an antipattern was added:
+> "Cross-cutting antipattern AP-{NNN} added to `.claude/antipatterns.md`.
+> Future brainstorm and implementation sessions will check this rule."
 
 ---
 

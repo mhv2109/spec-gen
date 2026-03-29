@@ -151,12 +151,14 @@ Read the skeleton of the target file:
 
 ### Step 4b — Adversarial challenge
 
-Before writing any code, state explicitly what could break with this approach:
+Before writing any code, state explicitly what could break with this approach.
+If `.claude/antipatterns.md` exists, read it and include any applicable patterns.
 
 > "Risk check on `$INSERTION_POINT`:
 > - `$CALLER_A` and `$CALLER_B` depend on this function — verify their assumptions
 >   hold after the change.
-> - `$EDGE_CASE` is not covered by the current test suite — add it in Step 6."
+> - `$EDGE_CASE` is not covered by the current test suite — add it in Step 6.
+> - [if antipatterns apply] AP-NNN (`$PATTERN_NAME`) — `$RULE` — applies here because `$REASON`."
 
 This is not a gate — do not wait for user input. It is a mandatory self-check
 that must appear in the output before the first line of code is written.

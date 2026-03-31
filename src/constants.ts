@@ -84,6 +84,12 @@ export const ARTIFACT_GENERATION_REPORT = 'generation-report.json';
 /** Filename for the shutdown state file */
 export const ARTIFACT_SHUTDOWN_STATE = 'shutdown-state.json';
 
+/** Filename for the spec coverage snapshot artifact */
+export const ARTIFACT_SPEC_SNAPSHOT = 'spec-snapshot.json';
+
+/** Filename for the parity audit report artifact */
+export const ARTIFACT_AUDIT_REPORT = 'audit-report.json';
+
 // ============================================================================
 // LLM / PROVIDER LIMITS
 // ============================================================================

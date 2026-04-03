@@ -129,7 +129,7 @@ export async function specGenGenerate(options: GenerateApiOptions = {}): Promise
   const geminiKey = process.env.GEMINI_API_KEY;
 
   const configuredProvider = options.provider ?? specGenConfig.generation.provider;
-  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot', 'cursor-agent'];
+  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot', 'gemini-cli', 'cursor-agent'];
 
   if (!noKeyProviders.includes(configuredProvider ?? '') && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
     throw new Error(

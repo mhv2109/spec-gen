@@ -626,6 +626,23 @@ export class AnthropicProvider implements LLMProvider {
 // ============================================================================
 
 /**
+ * Wrap a top-level array schema in an object so it satisfies OpenAI's
+ * structured-output requirement that the root type is "object".
+ * The existing unwrap logic in completeJSON (single-key object → array)
+ * reverses this transparently.  See: #52
+ */
+function wrapArraySchema(schema: object): object {
+  if ((schema as Record<string, unknown>).type === 'array') {
+    return {
+      type: 'object',
+      properties: { items: schema },
+      required: ['items'],
+    };
+  }
+  return schema;
+}
+
+/**
  * OpenAI provider
  */
 export class OpenAIProvider implements LLMProvider {
@@ -665,11 +682,12 @@ export class OpenAIProvider implements LLMProvider {
     if (request.responseFormat === 'json' && request.jsonSchema) {
       // Use OpenAI structured outputs when a JSON schema is provided.
       // This forces the model to conform to the schema (e.g. start an array). (#26)
+      // Wrap top-level array schemas in an object to satisfy OpenAI's requirement. (#52)
       body.response_format = {
         type: 'json_schema',
         json_schema: {
           name: 'response',
-          schema: request.jsonSchema,
+          schema: wrapArraySchema(request.jsonSchema),
         },
       };
     } else if (request.responseFormat === 'json') {
@@ -769,7 +787,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         type: 'json_schema',
         json_schema: {
           name: 'response',
-          schema: request.jsonSchema,
+          schema: wrapArraySchema(request.jsonSchema),
         },
       };
     } else if (request.responseFormat === 'json') {
@@ -866,7 +884,7 @@ export class CopilotProvider implements LLMProvider {
         type: 'json_schema',
         json_schema: {
           name: 'response',
-          schema: request.jsonSchema,
+          schema: wrapArraySchema(request.jsonSchema),
         },
       };
     } else if (request.responseFormat === 'json') {

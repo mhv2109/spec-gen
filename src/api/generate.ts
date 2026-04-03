@@ -129,7 +129,7 @@ export async function specGenGenerate(options: GenerateApiOptions = {}): Promise
   const geminiKey = process.env.GEMINI_API_KEY;
 
   const configuredProvider = options.provider ?? specGenConfig.generation.provider;
-  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot'];
+  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot', 'cursor-agent'];
 
   if (!noKeyProviders.includes(configuredProvider ?? '') && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
     throw new Error(
@@ -150,6 +150,10 @@ export async function specGenGenerate(options: GenerateApiOptions = {}): Promise
     'openai-compat': DEFAULT_OPENAI_COMPAT_MODEL,
     copilot: DEFAULT_COPILOT_MODEL,
     openai: DEFAULT_OPENAI_MODEL,
+    'claude-code': 'claude-code',
+    'mistral-vibe': 'mistral-vibe',
+    'gemini-cli': 'gemini-cli',
+    'cursor-agent': 'cursor-agent',
   };
   const effectiveModel = options.model || specGenConfig.generation.model || defaultModels[effectiveProvider];
 

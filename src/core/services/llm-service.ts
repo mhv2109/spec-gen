@@ -255,7 +255,7 @@ export interface LLMProvider {
   maxOutputTokens: number;
 }
 
-export type ProviderName = 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'gemini-cli' | 'claude-code' | 'mistral-vibe';
+export type ProviderName = 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'gemini-cli' | 'claude-code' | 'mistral-vibe' | 'cursor-agent';
 
 /**
  * Token usage tracking
@@ -470,6 +470,10 @@ const PRICING: Record<string, Record<string, { input: number; output: number }>>
   },
   'gemini-cli': {
     // No per-token cost: covered by Google account free tier
+    default: { input: 0, output: 0 },
+  },
+  'cursor-agent': {
+    // No per-token cost in spec-gen: Cursor subscription / CLI auth
     default: { input: 0, output: 0 },
   },
   copilot: {
@@ -991,6 +995,99 @@ export class GeminiCLIProvider implements LLMProvider {
       content,
       usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
       model: modelUsed,
+      finishReason: 'stop',
+    };
+  }
+
+  countTokens(text: string): number {
+    return estimateTokens(text);
+  }
+}
+
+// ============================================================================
+// CURSOR AGENT CLI PROVIDER (uses local `cursor-agent` CLI, no cloud API key)
+// ============================================================================
+
+/**
+ * Cursor Agent CLI provider
+ *
+ * Routes LLM calls through the Cursor Agent CLI in print mode (`-p`, JSON output).
+ * Authentication is handled by Cursor (see Cursor CLI headless documentation) —
+ * e.g. `cursor auth login` or `CURSOR_API_KEY` — not ANTHROPIC_API_KEY / OPENAI_API_KEY.
+ * If the binary is not on PATH, set `CURSOR_AGENT_CLI` to its full path.
+ */
+export class CursorAgentProvider implements LLMProvider {
+  name = 'cursor-agent';
+  maxContextTokens = 1_000_000;
+  maxOutputTokens = 8192;
+  private model: string | undefined;
+
+  constructor(model?: string) {
+    this.model = model && model !== 'cursor-agent' ? model : undefined;
+  }
+
+  async generateCompletion(request: CompletionRequest): Promise<CompletionResponse> {
+    const { execFileSync } = await import('child_process');
+
+    const fullPrompt = request.systemPrompt
+      ? `${request.systemPrompt}\n\n---\n\n${request.userPrompt}`
+      : request.userPrompt;
+
+    const args = ['-p', fullPrompt, '--output-format', 'json'];
+    if (this.model) args.push('--model', this.model);
+
+    const bin = process.env.CURSOR_AGENT_CLI ?? 'cursor-agent';
+
+    let raw: string;
+    try {
+      raw = execFileSync(bin, args, {
+        encoding: 'utf8',
+        maxBuffer: LLM_CLI_MAX_BUFFER_BYTES,
+        timeout: LLM_CLI_TIMEOUT_MS,
+      });
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string; status?: number };
+      const detail = e.stderr ?? e.stdout ?? e.message ?? String(err);
+      throw Object.assign(new Error(`cursor-agent CLI failed: ${detail}`), { retryable: false });
+    }
+
+    let content = '';
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+      if (parsed.is_error === true && typeof parsed.result === 'string') {
+        throw Object.assign(new Error(`cursor-agent CLI error: ${parsed.result}`), { retryable: false });
+      }
+
+      if (typeof parsed.result === 'string') {
+        content = parsed.result;
+      } else if (typeof parsed.response === 'string') {
+        content = parsed.response;
+      } else {
+        content = String(parsed.message ?? parsed.text ?? parsed.content ?? '');
+      }
+
+      const u = parsed.usage as Record<string, number | undefined> | undefined;
+      if (u) {
+        inputTokens = (u.input_tokens ?? u.inputTokens) as number | undefined;
+        outputTokens = (u.output_tokens ?? u.outputTokens) as number | undefined;
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && /cursor-agent CLI error:/.test(err.message)) throw err;
+      content = raw.trim();
+    }
+
+    if (!content) content = raw.trim();
+    inputTokens ??= estimateTokens(fullPrompt);
+    outputTokens ??= estimateTokens(content);
+
+    return {
+      content,
+      usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+      model: this.model ?? 'cursor-agent',
       finishReason: 'stop',
     };
   }
@@ -1584,8 +1681,10 @@ export function createLLMService(options: LLMServiceOptions = {}): LLMService {
     provider = new MistralVibeProvider(options.model);
   } else if (providerName === 'gemini-cli') {
     provider = new GeminiCLIProvider(options.model);
+  } else if (providerName === 'cursor-agent') {
+    provider = new CursorAgentProvider(options.model);
   } else {
-    throw new Error(`Unknown provider: ${providerName}. Supported: anthropic, openai, openai-compat, copilot, gemini, gemini-cli, claude-code, mistral-vibe`);
+    throw new Error(`Unknown provider: ${providerName}. Supported: anthropic, openai, openai-compat, copilot, gemini, gemini-cli, claude-code, mistral-vibe, cursor-agent`);
   }
 
   if (!sslVerify) {

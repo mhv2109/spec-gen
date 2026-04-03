@@ -396,16 +396,16 @@ Each spec.md follows OpenSpec conventions:
         : openaiCompatKey ? 'openai-compat'
         : 'openai';
       const rootConfig = specGenConfig as unknown as Record<string, string>;
-      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'claude-code' | 'mistral-vibe';
+      const effectiveProvider = (specGenConfig.generation.provider ?? rootConfig['provider'] ?? envDetectedProvider) as 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'gemini-cli' | 'claude-code' | 'mistral-vibe' | 'cursor-agent';
 
-      if (effectiveProvider !== 'claude-code' && effectiveProvider !== 'mistral-vibe' && effectiveProvider !== 'copilot' && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
+      if (effectiveProvider !== 'claude-code' && effectiveProvider !== 'mistral-vibe' && effectiveProvider !== 'copilot' && effectiveProvider !== 'gemini-cli' && effectiveProvider !== 'cursor-agent' && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
         logger.error('No LLM API key found.');
         logger.discovery('Set one of the following environment variables:');
         logger.discovery('  ANTHROPIC_API_KEY    → https://console.anthropic.com/');
         logger.discovery('  OPENAI_API_KEY       → https://platform.openai.com/');
         logger.discovery('  GEMINI_API_KEY       → https://aistudio.google.com/');
         logger.discovery('  OPENAI_COMPAT_API_KEY + OPENAI_COMPAT_BASE_URL  → Mistral, Groq, Ollama...');
-        logger.discovery('  Or set provider to "claude-code", "mistral-vibe", or "copilot" (no API key needed).');
+        logger.discovery('  Or set provider to "claude-code", "gemini-cli", "mistral-vibe", "cursor-agent", or "copilot" (no API key needed).');
         process.exitCode = 1;
         return;
       }
@@ -419,6 +419,8 @@ Each spec.md follows OpenSpec conventions:
         openai: DEFAULT_OPENAI_MODEL,
         'claude-code': 'claude-code',
         'mistral-vibe': 'mistral-vibe',
+        'gemini-cli': 'gemini-cli',
+        'cursor-agent': 'cursor-agent',
       };
       const effectiveModel = opts.model || specGenConfig.generation.model || defaultModels[effectiveProvider];
 

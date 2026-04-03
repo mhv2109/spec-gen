@@ -16,6 +16,7 @@ import {
   GeminiProvider,
   ClaudeCodeProvider,
   GeminiCLIProvider,
+  CursorAgentProvider,
   MistralVibeProvider,
   createMockLLMService,
   createLLMService,
@@ -641,14 +642,14 @@ describe('Integration Tests (skipped without API keys)', () => {
   describe('CLI Providers', () => {
     it('should create ClaudeCode provider', () => {
       const provider = new ClaudeCodeProvider();
-      
+
       expect(provider.name).toBe('claude-code');
       expect(provider.maxContextTokens).toBe(200_000);
     });
 
     it('should create MistralVibe provider', () => {
       const provider = new MistralVibeProvider();
-      
+
       expect(provider.name).toBe('mistral-vibe');
       expect(provider.maxContextTokens).toBe(128_000);
     });
@@ -661,6 +662,15 @@ describe('Integration Tests (skipped without API keys)', () => {
     it('should create service with mistral-vibe provider', () => {
       const service = createLLMService({ provider: 'mistral-vibe' });
       expect(service.getProviderName()).toBe('mistral-vibe');
+    });
+
+    it('should create service with cursor-agent provider', () => {
+      const service = createLLMService({ provider: 'cursor-agent' });
+      expect(service.getProviderName()).toBe('cursor-agent');
+    });
+
+    it('rejects cursor as unknown provider id', () => {
+      expect(() => createLLMService({ provider: 'cursor' as never })).toThrow(/Unknown provider/);
     });
 
     it('should support custom models for CLI providers', () => {
@@ -699,6 +709,12 @@ describe('lookupPricing', () => {
 
   it('returns zero-cost for claude-code provider', () => {
     const p = lookupPricing('claude-code', 'any-model');
+    expect(p.input).toBe(0);
+    expect(p.output).toBe(0);
+  });
+
+  it('returns zero-cost for cursor-agent provider', () => {
+    const p = lookupPricing('cursor-agent', 'any-model');
     expect(p.input).toBe(0);
     expect(p.output).toBe(0);
   });
@@ -1158,6 +1174,76 @@ describe('GeminiCLIProvider', () => {
     const err = await provider.generateCompletion({ systemPrompt: '', userPrompt: 'hi' }).catch(e => e);
     expect(err.message).toContain('gemini CLI failed');
     expect((err as { retryable?: boolean }).retryable).toBe(false);
+  });
+});
+
+// ============================================================================
+// CursorAgentProvider — CLI-based (mocked execFileSync)
+// ============================================================================
+
+describe('CursorAgentProvider', () => {
+  it('returns content from { result } JSON output', async () => {
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify({
+      result: 'cursor says hi',
+      usage: { input_tokens: 3, output_tokens: 2 },
+    }));
+    const provider = new CursorAgentProvider();
+    const result = await provider.generateCompletion({ systemPrompt: 'sys', userPrompt: 'hi' });
+    expect(result.content).toBe('cursor says hi');
+    expect(result.usage.inputTokens).toBe(3);
+    expect(result.usage.outputTokens).toBe(2);
+    expect(result.model).toBe('cursor-agent');
+  });
+
+  it('returns content from { response } JSON output', async () => {
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify({ response: 'via response field' }));
+    const provider = new CursorAgentProvider();
+    const result = await provider.generateCompletion({ systemPrompt: '', userPrompt: 'x' });
+    expect(result.content).toBe('via response field');
+  });
+
+  it('throws on CLI is_error', async () => {
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify({ result: 'bad', is_error: true }));
+    const provider = new CursorAgentProvider();
+    const err = await provider.generateCompletion({ systemPrompt: '', userPrompt: 'x' }).catch(e => e);
+    expect(err.message).toContain('cursor-agent CLI error');
+    expect((err as { retryable?: boolean }).retryable).toBe(false);
+  });
+
+  it('falls back to raw text when output is not JSON', async () => {
+    vi.mocked(execFileSync).mockReturnValue('plain cursor output');
+    const provider = new CursorAgentProvider();
+    const result = await provider.generateCompletion({ systemPrompt: '', userPrompt: 'x' });
+    expect(result.content).toBe('plain cursor output');
+  });
+
+  it('throws non-retryable error when CLI fails', async () => {
+    vi.mocked(execFileSync).mockImplementation(() => { throw Object.assign(new Error('spawn error'), { stderr: 'not found' }); });
+    const provider = new CursorAgentProvider();
+    const err = await provider.generateCompletion({ systemPrompt: '', userPrompt: 'x' }).catch(e => e);
+    expect(err.message).toContain('cursor-agent CLI failed');
+    expect((err as { retryable?: boolean }).retryable).toBe(false);
+  });
+
+  it('passes --model when configured', async () => {
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify({ result: 'ok' }));
+    const provider = new CursorAgentProvider('gpt-4o');
+    await provider.generateCompletion({ systemPrompt: '', userPrompt: 'go' });
+    const args = vi.mocked(execFileSync).mock.calls[vi.mocked(execFileSync).mock.calls.length - 1][1] as string[];
+    expect(args).toContain('--model');
+    expect(args).toContain('gpt-4o');
+  });
+
+  it('uses CURSOR_AGENT_CLI for binary path', async () => {
+    const prev = process.env.CURSOR_AGENT_CLI;
+    process.env.CURSOR_AGENT_CLI = '/opt/cursor/agent-bin';
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify({ result: 'x' }));
+    const provider = new CursorAgentProvider();
+    await provider.generateCompletion({ systemPrompt: '', userPrompt: 'y' });
+    const bin = vi.mocked(execFileSync).mock.calls[vi.mocked(execFileSync).mock.calls.length - 1][0] as string;
+    expect(bin).toBe('/opt/cursor/agent-bin');
+    if (prev === undefined) delete process.env.CURSOR_AGENT_CLI;
+    else process.env.CURSOR_AGENT_CLI = prev;
   });
 });
 

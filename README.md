@@ -309,7 +309,7 @@ spec-gen drift --no-color                # Plain output for CI logs
 
 ## LLM Providers
 
-spec-gen supports eight providers. The default is Anthropic Claude.
+spec-gen supports nine providers. The default is Anthropic Claude.
 
 | Provider | `provider` value | API key env var | Default model |
 |----------|-----------------|-----------------|---------------|
@@ -321,6 +321,7 @@ spec-gen supports eight providers. The default is Anthropic Claude.
 | Gemini CLI | `gemini-cli` | *(none)* | *(CLI default)* |
 | Claude Code | `claude-code` | *(none)* | *(CLI default)* |
 | Mistral Vibe | `mistral-vibe` | *(none)* | *(CLI default)* |
+| Cursor Agent CLI | `cursor-agent` | *(none)* | *(CLI default)* |
 
 ### Selecting a provider
 
@@ -417,13 +418,14 @@ No API key is required — the copilot-api proxy handles authentication via your
 
 ### CLI-based providers (no API key)
 
-Three providers route LLM calls through local CLI tools instead of HTTP APIs. No API key or configuration is needed — just have the CLI installed and on your PATH.
+Four providers route LLM calls through local CLI tools instead of HTTP APIs. No API key or configuration is needed — just have the CLI installed and on your PATH.
 
 | Provider | CLI binary | Install |
-|----------|-----------|---------|
+|----------|-----------|----------------|
 | `claude-code` | `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires Claude Max/Pro subscription) |
 | `gemini-cli` | `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (free tier with Google account) |
 | `mistral-vibe` | `vibe` | [Mistral Vibe](https://github.com/mistralai/mistral-vibe) (standalone binary) |
+| `cursor-agent` | `cursor-agent` | [Cursor CLI](https://cursor.com/docs/cli/overview) (Cursor subscription / CLI auth) |
 
 ```json
 {
@@ -1316,7 +1318,7 @@ The index is stored in `.spec-gen/analysis/vector-index/` and is automatically u
   export OPENAI_COMPAT_API_KEY=ollama       # OpenAI-compatible local server
   export GEMINI_API_KEY=...                 # Google Gemini
   ```
-  Or use a CLI-based provider (`claude-code`, `gemini-cli`, `mistral-vibe`) which requires no API key — just the CLI tool on your PATH.
+  Or use a CLI-based provider (`claude-code`, `gemini-cli`, `mistral-vibe`, `cursor-agent`) which requires no API key — just the CLI tool on your PATH.
 - `analyze`, `drift`, and `init` require no API key
 
 ## Supported Languages

@@ -245,7 +245,7 @@ export async function specGenRun(options: RunApiOptions = {}): Promise<RunResult
   const openaiKey = process.env.OPENAI_API_KEY;
   const openaiCompatKey = process.env.OPENAI_COMPAT_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
-  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot'];
+  const noKeyProviders = ['claude-code', 'mistral-vibe', 'copilot', 'gemini-cli', 'cursor-agent'];
   if (!noKeyProviders.includes(options.provider ?? '') && !anthropicKey && !openaiKey && !openaiCompatKey && !geminiKey) {
     throw new Error('No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENAI_COMPAT_API_KEY, or use provider "copilot".');
   }
@@ -262,6 +262,10 @@ export async function specGenRun(options: RunApiOptions = {}): Promise<RunResult
     'openai-compat': DEFAULT_OPENAI_COMPAT_MODEL,
     copilot: DEFAULT_COPILOT_MODEL,
     openai: DEFAULT_OPENAI_MODEL,
+    'claude-code': 'claude-code',
+    'mistral-vibe': 'mistral-vibe',
+    'gemini-cli': 'gemini-cli',
+    'cursor-agent': 'cursor-agent',
   };
   const model = options.model ?? defaultModels[provider] ?? DEFAULT_ANTHROPIC_MODEL;
   let llm: LLMService;

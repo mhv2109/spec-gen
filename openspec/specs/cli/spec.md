@@ -107,6 +107,26 @@ The system SHALL enables or disables interactive mode.
 - **WHEN** setInteractiveMode is called
 - **THEN** Interactive mode is enabled or disabled based on input
 
+### Requirement: GeneratePreflightExemptsCursorAgentFromApiKeys
+
+The `spec-gen generate` workflow (CLI command and programmatic entrypoints that perform the same API-key preflight) SHALL treat `cursor-agent` as a provider that does not require `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPAT_API_KEY` to be set for pre-flight validation.
+
+Authentication for Cursor SHALL remain the responsibility of the Cursor CLI and Cursor’s documented auth mechanisms (not spec-gen cloud keys).
+
+#### Scenario: CliGenerateWithCursorAgentOnly
+
+- **GIVEN** `.spec-gen/config.json` sets `generation.provider` to `cursor-agent`
+- **AND** none of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPAT_API_KEY` are set
+- **WHEN** the user runs `spec-gen generate` with otherwise valid options
+- **THEN** pre-flight does not fail solely due to missing those environment variables
+
+#### Scenario: ProgrammaticGenerateWithCursorAgentOnly
+
+- **GIVEN** programmatic generation is invoked with provider `cursor-agent`
+- **AND** none of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPAT_API_KEY` are set
+- **WHEN** generation proceeds past provider resolution
+- **THEN** pre-flight does not throw solely due to missing those environment variables
+
 ## Technical Notes
 
 - **Dependencies**: @inquirer/prompts

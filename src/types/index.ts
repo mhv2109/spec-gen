@@ -38,7 +38,7 @@ export interface AnalysisConfig {
 }
 
 export interface GenerationConfig {
-  provider?: 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'claude-code' | 'mistral-vibe';
+  provider?: 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'claude-code' | 'mistral-vibe' | 'gemini-cli' | 'cursor-agent';
   model?: string;
   openaiCompatBaseUrl?: string;
   skipSslVerify?: boolean;

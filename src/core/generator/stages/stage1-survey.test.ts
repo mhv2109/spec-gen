@@ -24,6 +24,7 @@ import { createMockLLMService } from '../../services/llm-service.js';
 import type { PipelineOptions, ProjectSurveyResult, StageResult } from '../../../types/pipeline.js';
 import type { RepoStructure, LLMContext } from '../../analyzer/artifact-generator.js';
 import { formatSignatureMaps } from '../../analyzer/signature-extractor.js';
+import { resolveStage1PathSelection } from '../../services/stage1-path-selection.js';
 
 // ============================================================================
 // FIXTURES
@@ -348,6 +349,26 @@ describe('Stage 1: Project Survey', () => {
       expect(userPrompt).toContain('Detected Domains:');
       expect(userPrompt).toContain('Total files: 50');
       expect(userPrompt).toContain('Analyzed files: 40');
+    });
+
+    it('uses path-pressure system prompt when stage1PathSelection is set', async () => {
+      mockProvider.setDefaultResponse(JSON.stringify(MOCK_SURVEY_RESULT));
+      const options: PipelineOptions = {
+        ...MOCK_PIPELINE_OPTIONS,
+        stage1PathSelection: resolveStage1PathSelection({ pathPressure: 'high' }),
+      };
+
+      await runStage1WithSection(
+        llmService,
+        options,
+        saveResult,
+        MOCK_REPO_STRUCTURE,
+        'files',
+        true
+      );
+
+      const request = mockProvider.callHistory[0];
+      expect(request.systemPrompt).toContain('Path selection emphasis');
     });
   });
 

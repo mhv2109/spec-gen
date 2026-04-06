@@ -5,6 +5,15 @@
 import type { ProgressIndicator } from '../utils/progress.js';
 import type { LLMService } from '../core/services/llm-service.js';
 import type { SearchResult } from '../core/analyzer/vector-index.js';
+import type { Stage1PathPressurePreset } from './index.js';
+
+/** Normalized Stage 1 path pressure after validation (used when building the survey prompt) */
+export interface ResolvedStage1PathSelection {
+  preset: Stage1PathPressurePreset;
+  minSchema: number;
+  minService: number;
+  minApi: number;
+}
 
 /** Semantic search function injected into the pipeline to replace name-based heuristics. */
 export type SemanticSearchFn = (query: string, limit: number) => Promise<SearchResult[]>;
@@ -183,6 +192,8 @@ export interface PipelineOptions {
    *  schema/service/API file selection in stages 2–4. Falls back to heuristics if absent
    *  or if the search returns no results for a given domain. */
   semanticSearch?: SemanticSearchFn;
+  /** Resolved Stage 1 path pressure; when omitted, stages use default survey prompt behavior */
+  stage1PathSelection?: ResolvedStage1PathSelection;
 }
 
 // ============================================================================

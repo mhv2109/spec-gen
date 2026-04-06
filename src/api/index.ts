@@ -52,7 +52,14 @@ export type {
 } from './types.js';
 
 // Re-export key core types that consumers will need
-export type { AuditReport, DriftResult, DriftSeverity, SpecGenConfig } from '../types/index.js';
+export type {
+  AuditReport,
+  DriftResult,
+  DriftSeverity,
+  SpecGenConfig,
+  Stage1PathPressurePreset,
+  Stage1PathSelectionConfig,
+} from '../types/index.js';
 export type { RepositoryMap } from './types.js';
 export type { DependencyGraphResult } from '../core/analyzer/dependency-graph.js';
 export type { PipelineResult } from '../core/generator/spec-pipeline.js';

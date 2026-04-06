@@ -10,7 +10,8 @@ import { formatSignatureMaps, STAGE1_MAX_CHARS } from '../../analyzer/signature-
 import type { LLMService } from '../../services/llm-service.js';
 import type { PipelineOptions, ProjectSurveyResult, StageResult } from '../../../types/pipeline.js';
 import type { LLMContext, RepoStructure } from '../../analyzer/artifact-generator.js';
-import { PROMPTS } from '../prompts.js';
+import { buildStage1SurveySystemPrompt } from '../prompts.js';
+import { resolveStage1PathSelection } from '../../services/stage1-path-selection.js';
 
 export async function runStage1(
   llm: LLMService,
@@ -73,9 +74,12 @@ Statistics:
 ${sectionLabel}
 ${fileListingSection}`;
 
+  const stage1Selection = options.stage1PathSelection ?? resolveStage1PathSelection(undefined);
+  const systemPrompt = buildStage1SurveySystemPrompt(stage1Selection);
+
   try {
     const result = await llm.completeJSON<ProjectSurveyResult>({
-      systemPrompt: PROMPTS.stage1_survey,
+      systemPrompt,
       userPrompt,
       temperature: 0.3,
       maxTokens: STAGE1_MAX_TOKENS,

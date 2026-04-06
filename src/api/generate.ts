@@ -14,6 +14,7 @@ import {
 import { createLLMService } from '../core/services/llm-service.js';
 import type { LLMService } from '../core/services/llm-service.js';
 import { SpecGenerationPipeline } from '../core/generator/spec-pipeline.js';
+import { resolveStage1PathSelection } from '../core/services/stage1-path-selection.js';
 import { OpenSpecFormatGenerator } from '../core/generator/openspec-format-generator.js';
 import { OpenSpecWriter, type WriteMode } from '../core/generator/openspec-writer.js';
 import { ADRGenerator } from '../core/generator/adr-generator.js';
@@ -217,6 +218,7 @@ export async function specGenGenerate(options: GenerateApiOptions = {}): Promise
     outputDir: join(rootPath, SPEC_GEN_DIR, SPEC_GEN_GENERATION_SUBDIR),
     saveIntermediate: true,
     generateADRs: adr || adrOnly,
+    stage1PathSelection: resolveStage1PathSelection(specGenConfig.generation.stage1),
   });
 
   let pipelineResult;

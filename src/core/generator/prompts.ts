@@ -3,9 +3,10 @@
  * These are used by the stage functions to construct LLM requests.
  */
 
+import type { ResolvedStage1PathSelection } from '../../types/pipeline.js';
 
-export const PROMPTS = {
-  stage1_survey: `You are a senior software architect performing a codebase audit.
+/** Baseline Stage 1 system prompt (path pressure paragraphs are appended when configured). */
+export const STAGE1_SURVEY_BASE = `You are a senior software architect performing a codebase audit.
 Your task is to categorize this project based on the analysis data provided.
 
 Respond with a JSON object containing:
@@ -36,7 +37,44 @@ Example output:
   "apiFiles": ["src/routes/orders.ts", "src/cli/commands/create.ts"]
 }
 
-Respond ONLY with valid JSON.`,
+Respond ONLY with valid JSON.`;
+
+/**
+ * Build the Stage 1 system prompt from resolved path-selection settings.
+ */
+export function buildStage1SurveySystemPrompt(selection: ResolvedStage1PathSelection): string {
+  const { preset, minSchema, minService, minApi } = selection;
+  const emphasize =
+    preset !== 'default' || minSchema > 0 || minService > 0 || minApi > 0;
+  if (!emphasize) {
+    return STAGE1_SURVEY_BASE;
+  }
+
+  const lines: string[] = [
+    '## Path selection emphasis',
+    'List every file path from the provided analysis that plausibly belongs in schemaFiles, serviceFiles, or apiFiles. Prefer completeness over a short representative sample.',
+    'Use each path string exactly as shown in the analysis. Do not invent paths that are not listed.',
+  ];
+
+  if (minSchema > 0 || minService > 0 || minApi > 0) {
+    lines.push(
+      'When at least that many qualifying files exist in the analysis listing, target these minimums (include all qualifying paths if fewer exist):'
+    );
+    if (minSchema > 0) lines.push(`- schemaFiles: at least ${minSchema} paths`);
+    if (minService > 0) lines.push(`- serviceFiles: at least ${minService} paths`);
+    if (minApi > 0) lines.push(`- apiFiles: at least ${minApi} paths`);
+  } else {
+    lines.push(
+      'Include the maximum number of qualifying paths you can identify from the listing.'
+    );
+  }
+
+  return `${STAGE1_SURVEY_BASE}\n\n${lines.join('\n')}`;
+}
+
+export const PROMPTS = {
+  /** Baseline only; runtime uses `buildStage1SurveySystemPrompt` when path pressure is configured */
+  stage1_survey: STAGE1_SURVEY_BASE,
 
   stage2_entities: (projectCategory: string, frameworks: string[]) => `You are analyzing the core data models of a ${projectCategory} built with ${frameworks.join(', ')}.
 

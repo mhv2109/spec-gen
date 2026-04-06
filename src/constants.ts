@@ -219,6 +219,15 @@ export const DIFF_MAX_CHARS = 4_000;
 /** Stage 1 (project survey) max output tokens */
 export const STAGE1_MAX_TOKENS = 3_000;
 
+/** Maximum suggested minimum paths per category (schema/service/api) for Stage 1 pressure config */
+export const STAGE1_MAX_PATHS_PER_CATEGORY = 200;
+
+/** Default minimum paths per category when `pathPressure` is `high` */
+export const STAGE1_HIGH_MIN_PATHS = 25;
+
+/** Default minimum paths per category when `pathPressure` is `exhaustive` */
+export const STAGE1_EXHAUSTIVE_MIN_PATHS = 50;
+
 /** Stage 2 (entity extraction) max output tokens per file chunk */
 export const STAGE2_MAX_TOKENS = 4_000;
 

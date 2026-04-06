@@ -342,6 +342,27 @@ Override the model for a single run:
 spec-gen generate --model claude-opus-4-20250514
 ```
 
+### Stage 1 path selection (large monorepos)
+
+Stage 1 chooses which file paths feed entity, service, and API extraction. By default the model may return a short list. To push broader enumeration (higher token use in later stages), set optional `generation.stage1` in `.spec-gen/config.json`:
+
+```json
+{
+  "generation": {
+    "provider": "anthropic",
+    "domains": "auto",
+    "stage1": {
+      "pathPressure": "high"
+    }
+  }
+}
+```
+
+- **`pathPressure`**: `default` (omit or explicit) keeps the baseline survey prompt; `high` adds minimum targets (25 paths per category when that many qualifying files exist); `exhaustive` uses stronger targets (50 per category).
+- **`minPathsPerCategory`**: optional overrides per list — `{ "schema": 40, "service": 40, "api": 30 }`. Values are clamped to a safe maximum (200).
+
+Invalid preset names or non-numeric overrides log a warning and fall back to `default`.
+
 ### OpenAI-compatible servers (Ollama, Mistral, Groq, LM Studio, vLLM...)
 
 Use `provider: "openai-compat"` with a base URL and API key:

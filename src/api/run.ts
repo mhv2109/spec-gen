@@ -34,6 +34,7 @@ import { DependencyGraphBuilder, type DependencyGraphResult } from '../core/anal
 import { AnalysisArtifactGenerator, repoStructureToRepoMap } from '../core/analyzer/artifact-generator.js';
 import type { RepoStructure, LLMContext, AnalysisArtifacts } from '../core/analyzer/artifact-generator.js';
 import { SpecGenerationPipeline } from '../core/generator/spec-pipeline.js';
+import { resolveStage1PathSelection } from '../core/services/stage1-path-selection.js';
 import { OpenSpecFormatGenerator } from '../core/generator/openspec-format-generator.js';
 import { OpenSpecWriter } from '../core/generator/openspec-writer.js';
 import { ADRGenerator } from '../core/generator/adr-generator.js';
@@ -303,6 +304,7 @@ export async function specGenRun(options: RunApiOptions = {}): Promise<RunResult
     outputDir: join(rootPath, SPEC_GEN_DIR, SPEC_GEN_GENERATION_SUBDIR),
     saveIntermediate: true,
     generateADRs: adr,
+    stage1PathSelection: resolveStage1PathSelection(specGenConfig?.generation?.stage1),
   });
 
   let pipelineResult;

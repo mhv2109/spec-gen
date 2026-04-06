@@ -40,6 +40,7 @@ import {
   readSpecGenConfig,
   readOpenSpecConfig,
 } from '../../core/services/config-manager.js';
+import { resolveStage1PathSelection } from '../../core/services/stage1-path-selection.js';
 import {
   createLLMService,
   lookupPricing,
@@ -564,6 +565,7 @@ Each spec.md follows OpenSpec conventions:
         generateADRs: opts.adr || opts.adrOnly,
         progress,
         semanticSearch,
+        stage1PathSelection: resolveStage1PathSelection(specGenConfig.generation.stage1),
       });
 
       let pipelineResult: PipelineResult;

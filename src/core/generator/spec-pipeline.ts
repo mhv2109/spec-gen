@@ -17,6 +17,7 @@ import { getSkeletonContent, detectLanguage, isSkeletonWorthIncluding } from '..
 import type { DependencyGraphResult } from '../analyzer/dependency-graph.js';
 import type { RefactorReport } from '../analyzer/refactor-analyzer.js';
 import { isTestFile } from '../analyzer/artifact-generator.js';
+import { resolveStage1PathSelection } from '../services/stage1-path-selection.js';
 import { runStage1 } from './stages/stage1-survey.js';
 import { runStage2 } from './stages/stage2-entities.js';
 import { runStage3 } from './stages/stage3-services.js';
@@ -72,7 +73,9 @@ export type {
  */
 export class SpecGenerationPipeline implements PipelineContext {
   llm: LLMService;
-  options: Required<Omit<PipelineOptions, 'progress' | 'semanticSearch'>>;
+  options: Required<Omit<PipelineOptions, 'progress' | 'semanticSearch'>> & {
+    stage1PathSelection: import('../../types/pipeline.js').ResolvedStage1PathSelection;
+  };
   private progress?: ProgressIndicator;
   private semanticSearch?: SemanticSearchFn;
   /** Set at the start of run() and used by stage methods for graph-based prompts */
@@ -90,6 +93,8 @@ export class SpecGenerationPipeline implements PipelineContext {
       rootPath: options.rootPath ?? '',
       saveIntermediate: options.saveIntermediate ?? true,
       generateADRs: options.generateADRs ?? false,
+      stage1PathSelection:
+        options.stage1PathSelection ?? resolveStage1PathSelection(undefined),
     };
   }
 

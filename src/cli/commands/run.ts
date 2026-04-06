@@ -56,6 +56,7 @@ import {
   SpecGenerationPipeline,
   type PipelineResult,
 } from '../../core/generator/spec-pipeline.js';
+import { resolveStage1PathSelection } from '../../core/services/stage1-path-selection.js';
 import {
   OpenSpecFormatGenerator,
 } from '../../core/generator/openspec-format-generator.js';
@@ -567,6 +568,7 @@ The pipeline saves run metadata to .spec-gen/runs/ for tracking.
         outputDir: join(rootPath, SPEC_GEN_DIR, SPEC_GEN_GENERATION_SUBDIR),
         saveIntermediate: true,
         generateADRs: opts.adr,
+        stage1PathSelection: resolveStage1PathSelection(specGenConfig?.generation?.stage1),
       });
 
       let pipelineResult: PipelineResult;

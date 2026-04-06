@@ -37,12 +37,29 @@ export interface AnalysisConfig {
   excludePatterns: string[];
 }
 
+/** Preset for how aggressively Stage 1 should enumerate schema/service/API file paths */
+export type Stage1PathPressurePreset = 'default' | 'high' | 'exhaustive';
+
+/** Optional Stage 1 survey tuning in `.spec-gen/config.json` under `generation.stage1` */
+export interface Stage1PathSelectionConfig {
+  /** Breadth preset; omit or `default` keeps the baseline Stage 1 prompt */
+  pathPressure?: Stage1PathPressurePreset;
+  /** Override minimum path counts per category (clamped to a safe maximum) */
+  minPathsPerCategory?: {
+    schema?: number;
+    service?: number;
+    api?: number;
+  };
+}
+
 export interface GenerationConfig {
   provider?: 'anthropic' | 'openai' | 'openai-compat' | 'copilot' | 'gemini' | 'claude-code' | 'mistral-vibe' | 'gemini-cli' | 'cursor-agent';
   model?: string;
   openaiCompatBaseUrl?: string;
   skipSslVerify?: boolean;
   domains: string | string[];
+  /** Optional Stage 1 file-list enumeration pressure (large monorepos) */
+  stage1?: Stage1PathSelectionConfig;
 }
 
 export interface LLMConfig {
